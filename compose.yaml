@@ -1,0 +1,56 @@
+services:
+  auth:
+    build:
+      context: .
+      args:
+        SERVICE: auth
+        GO_VERSION: "1.25"
+    environment:
+      - PORT=8081
+      - JWT_SECRET=dev-secret
+    ports:
+      - "8081:8081"
+
+  catalog:
+    build:
+      context: .
+      args:
+        SERVICE: catalog
+        GO_VERSION: "1.25"
+    environment:
+      - PORT=8082
+    ports:
+      - "8082:8082"
+
+  order:
+    build:
+      context: .
+      args:
+        SERVICE: order
+        GO_VERSION: "1.25"
+    environment:
+      - PORT=8083
+      - CATALOG_URL=http://catalog:8082
+    ports:
+      - "8083:8083"
+    depends_on:
+      - catalog
+
+  gateway:
+    build:
+      context: .
+      args:
+        SERVICE: gateway
+        GO_VERSION: "1.25"
+    environment:
+      - PORT=8080
+      - JWT_SECRET=dev-secret
+      - AUTH_URL=http://auth:8081
+      - CATALOG_URL=http://catalog:8082
+      - ORDER_URL=http://order:8083
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth
+      - catalog
+      - order
