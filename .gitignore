@@ -1,0 +1,5 @@
+.idea/
+*.exe
+*.out
+bin/
+dist/
