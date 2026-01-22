@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ministore
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: auth }
+  template:
+    metadata:
+      labels: { app: auth }
+    spec:
+      containers:
+        - name: auth
+          image: ministore-auth:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PORT, value: "8081" }
+            - { name: JWT_SECRET, value: "dev-secret" }
+          ports:
+            - { containerPort: 8081 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8081 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: ministore
+spec:
+  selector: { app: auth }
+  ports:
+    - { port: 8081, targetPort: 8081 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: catalog }
+  template:
+    metadata:
+      labels: { app: catalog }
+    spec:
+      containers:
+        - name: catalog
+          image: ministore-catalog:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PORT, value: "8082" }
+          ports:
+            - { containerPort: 8082 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8082 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8082 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog
+  namespace: ministore
+spec:
+  selector: { app: catalog }
+  ports:
+    - { port: 8082, targetPort: 8082 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: order }
+  template:
+    metadata:
+      labels: { app: order }
+    spec:
+      containers:
+        - name: order
+          image: ministore-order:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PORT, value: "8083" }
+            - { name: CATALOG_URL, value: "http://catalog:8082" }
+          ports:
+            - { containerPort: 8083 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8083 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8083 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order
+  namespace: ministore
+spec:
+  selector: { app: order }
+  ports:
+    - { port: 8083, targetPort: 8083 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      containers:
+        - name: gateway
+          image: ministore-gateway:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: JWT_SECRET, value: "dev-secret" }
+            - { name: AUTH_URL, value: "http://auth:8081" }
+            - { name: CATALOG_URL, value: "http://catalog:8082" }
+            - { name: ORDER_URL, value: "http://order:8083" }
+          ports:
+            - { containerPort: 8080 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: ministore
+spec:
+  selector: { app: gateway }
+  ports:
+    - { port: 8080, targetPort: 8080 }
