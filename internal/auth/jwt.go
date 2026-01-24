@@ -9,10 +9,14 @@ import (
 
 type TokenMaker struct {
 	secret []byte
+	issuer string
 }
 
 func NewTokenMaker(secret string) *TokenMaker {
-	return &TokenMaker{secret: []byte(secret)}
+	return &TokenMaker{
+		secret: []byte(secret),
+		issuer: "ministore-auth",
+	}
 }
 
 type Claims struct {
@@ -24,13 +28,16 @@ type Claims struct {
 
 func (t *TokenMaker) New(userID, email, role string, ttl time.Duration) (string, error) {
 	now := time.Now()
+
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			Subject:   userID,
+			Issuer:    t.issuer,
 			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 	}
 
@@ -47,9 +54,12 @@ func (t *TokenMaker) Parse(tokenStr string) (Claims, error) {
 		}
 		return t.secret, nil
 	})
-
 	if err != nil || token == nil || !token.Valid {
 		return Claims{}, errors.New("invalid token")
+	}
+
+	if c.Issuer != "" && c.Issuer != t.issuer {
+		return Claims{}, errors.New("invalid issuer")
 	}
 
 	return c, nil
