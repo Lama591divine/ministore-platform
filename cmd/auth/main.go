@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
 
 	"MiniStore/internal/auth"
 	"MiniStore/pkg/kit"
@@ -15,7 +16,7 @@ import (
 func main() {
 	service := "auth"
 	log := kit.NewLogger(service)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	port := getenv("PORT", "8081")
 	jwtSecret := getenv("JWT_SECRET", "dev-secret")
@@ -32,7 +33,6 @@ func main() {
 	r.Use(chimw.RequestID)
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(log))
-
 	r.Use(metrics.Middleware(service, func(r *http.Request) string {
 		if rp := chi.RouteContext(r.Context()).RoutePattern(); rp != "" {
 			return rp
@@ -43,7 +43,9 @@ func main() {
 	r.Handle("/metrics", promhttp.Handler())
 	r.Mount("/", s.Routes())
 
-	_ = kit.RunHTTPServer(":"+port, r, log)
+	if err := kit.RunHTTPServer(":"+port, r, log); err != nil {
+		log.Fatal("http server stopped", zap.Error(err))
+	}
 }
 
 func getenv(k, def string) string {

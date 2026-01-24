@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"MiniStore/pkg/kit"
@@ -45,17 +46,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", map[string]any{"cause": err.Error()})
 		return
 	}
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Password = strings.TrimSpace(req.Password)
+
 	if req.Email == "" || req.Password == "" {
 		kit.WriteError(w, r, http.StatusBadRequest, "email/password required", nil)
 		return
 	}
+	if len(req.Password) < 8 {
+		kit.WriteError(w, r, http.StatusBadRequest, "password too short", map[string]any{"min_len": 8})
+		return
+	}
 
-	id := makeUserID(req.Email)
+	id := "u_" + uuid.NewString()
 
 	if err := s.Store.Create(req.Email, req.Password, "user", id); err != nil {
 		kit.WriteError(w, r, http.StatusConflict, err.Error(), nil)
@@ -81,11 +88,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", map[string]any{"cause": err.Error()})
 		return
 	}
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Password = strings.TrimSpace(req.Password)
+
 	if req.Email == "" || req.Password == "" {
 		kit.WriteError(w, r, http.StatusBadRequest, "email/password required", nil)
 		return
@@ -125,11 +134,4 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		"email":   claims.Email,
 		"role":    claims.Role,
 	})
-}
-
-func makeUserID(email string) string {
-	id := strings.ReplaceAll(email, "@", "_")
-	id = strings.ReplaceAll(id, ".", "_")
-	id = strings.ReplaceAll(id, "+", "_")
-	return "u_" + id
 }

@@ -26,6 +26,7 @@ func NewStore() *Store {
 
 func (s *Store) Create(email, password, role, id string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
+	password = strings.TrimSpace(password)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
