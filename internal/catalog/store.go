@@ -1,6 +1,9 @@
 package catalog
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 type Product struct {
 	ID         string `json:"id"`
@@ -23,6 +26,7 @@ func NewStore() *Store {
 func (s *Store) List() []Product {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	out := make([]Product, 0, len(s.m))
 	for _, p := range s.m {
 		out = append(out, p)
@@ -30,9 +34,16 @@ func (s *Store) List() []Product {
 	return out
 }
 
+func (s *Store) ListSortedByID() []Product {
+	out := s.List()
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 func (s *Store) Get(id string) (Product, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	p, ok := s.m[id]
 	return p, ok
 }

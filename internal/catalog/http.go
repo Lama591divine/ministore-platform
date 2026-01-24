@@ -14,8 +14,9 @@ type Server struct {
 
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	r.Get("/products", s.list)
 	r.Get("/products/{id}", s.get)
@@ -23,8 +24,9 @@ func (s *Server) Routes() http.Handler {
 	return r
 }
 
-func (s *Server) list(w http.ResponseWriter, r *http.Request) {
-	kit.WriteJSON(w, http.StatusOK, s.Store.List())
+func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
+	products := s.Store.ListSortedByID()
+	kit.WriteJSON(w, http.StatusOK, products)
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
