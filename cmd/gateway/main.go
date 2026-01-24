@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
 
 	"MiniStore/internal/auth"
 	"MiniStore/internal/gateway"
@@ -46,7 +47,12 @@ func main() {
 	r.Use(chimw.RequestID)
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(log))
-	r.Use(metrics.Middleware(service, func(r *http.Request) string { return r.URL.Path }))
+	r.Use(metrics.Middleware(service, func(r *http.Request) string {
+		if rp := chi.RouteContext(r.Context()).RoutePattern(); rp != "" {
+			return rp
+		}
+		return r.URL.Path
+	}))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
@@ -66,7 +72,9 @@ func main() {
 		pr.Handle("/orders/*", orderProxy)
 	})
 
-	_ = kit.RunHTTPServer(":"+port, r, log)
+	if err := kit.RunHTTPServer(":"+port, r, log); err != nil {
+		log.Fatal("http server stopped", zap.Error(err))
+	}
 }
 
 func getenv(k, def string) string {
