@@ -23,26 +23,34 @@ type Claims struct {
 }
 
 func (t *TokenMaker) New(userID, email, role string, ttl time.Duration) (string, error) {
+	now := time.Now()
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(t.secret)
 }
 
 func (t *TokenMaker) Parse(tokenStr string) (Claims, error) {
 	var c Claims
+
 	token, err := jwt.ParseWithClaims(tokenStr, &c, func(token *jwt.Token) (any, error) {
+		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, errors.New("unexpected signing method")
+		}
 		return t.secret, nil
 	})
-	if err != nil || !token.Valid {
+
+	if err != nil || token == nil || !token.Valid {
 		return Claims{}, errors.New("invalid token")
 	}
+
 	return c, nil
 }

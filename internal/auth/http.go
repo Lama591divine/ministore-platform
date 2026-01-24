@@ -12,6 +12,8 @@ import (
 	"MiniStore/pkg/kit"
 )
 
+const maxBodyBytes = 1 << 20
+
 type Server struct {
 	Log   *zap.Logger
 	Store *Store
@@ -21,8 +23,8 @@ type Server struct {
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	r.Post("/auth/register", s.handleRegister)
 	r.Post("/auth/login", s.handleLogin)
@@ -37,18 +39,24 @@ type registerReq struct {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
 	var req registerReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
 		return
 	}
-	req.Email = strings.TrimSpace(req.Email)
+
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	if req.Email == "" || req.Password == "" {
 		kit.WriteError(w, r, http.StatusBadRequest, "email/password required", nil)
 		return
 	}
 
-	id := "u_" + strings.ReplaceAll(req.Email, "@", "_")
+	id := makeUserID(req.Email)
+
 	if err := s.Store.Create(req.Email, req.Password, "user", id); err != nil {
 		kit.WriteError(w, r, http.StatusConflict, err.Error(), nil)
 		return
@@ -61,17 +69,27 @@ type loginReq struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
+
 type loginResp struct {
 	AccessToken string `json:"access_token"`
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
 	var req loginReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
 		return
 	}
-	req.Email = strings.TrimSpace(req.Email)
+
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if req.Email == "" || req.Password == "" {
+		kit.WriteError(w, r, http.StatusBadRequest, "email/password required", nil)
+		return
+	}
 
 	u, err := s.Store.Verify(req.Email, req.Password)
 	if err != nil {
@@ -95,6 +113,7 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		kit.WriteError(w, r, http.StatusUnauthorized, "missing token", nil)
 		return
 	}
+
 	claims, err := s.JWT.Parse(strings.TrimPrefix(authz, "Bearer "))
 	if err != nil {
 		kit.WriteError(w, r, http.StatusUnauthorized, "invalid token", nil)
@@ -106,4 +125,11 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		"email":   claims.Email,
 		"role":    claims.Role,
 	})
+}
+
+func makeUserID(email string) string {
+	id := strings.ReplaceAll(email, "@", "_")
+	id = strings.ReplaceAll(id, ".", "_")
+	id = strings.ReplaceAll(id, "+", "_")
+	return "u_" + id
 }

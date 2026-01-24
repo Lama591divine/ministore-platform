@@ -32,7 +32,13 @@ func main() {
 	r.Use(chimw.RequestID)
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(log))
-	r.Use(metrics.Middleware(service, func(r *http.Request) string { return r.URL.Path }))
+
+	r.Use(metrics.Middleware(service, func(r *http.Request) string {
+		if rp := chi.RouteContext(r.Context()).RoutePattern(); rp != "" {
+			return rp
+		}
+		return r.URL.Path
+	}))
 
 	r.Handle("/metrics", promhttp.Handler())
 	r.Mount("/", s.Routes())

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
@@ -24,29 +25,38 @@ func NewStore() *Store {
 }
 
 func (s *Store) Create(email, password, role, id string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.byEmail[email]; ok {
 		return errors.New("email already exists")
 	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
+
 	s.byEmail[email] = User{ID: id, Email: email, Hash: hash, Role: role}
 	return nil
 }
 
 func (s *Store) Verify(email, password string) (User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+
 	s.mu.RLock()
 	u, ok := s.byEmail[email]
 	s.mu.RUnlock()
+
 	if !ok {
 		return User{}, errors.New("invalid credentials")
 	}
+
 	if err := bcrypt.CompareHashAndPassword(u.Hash, []byte(password)); err != nil {
 		return User{}, errors.New("invalid credentials")
 	}
+
 	return u, nil
 }
