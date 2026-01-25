@@ -13,7 +13,7 @@ type Metrics struct {
 	Latenc *prometheus.HistogramVec
 }
 
-func NewMetrics() *Metrics {
+func NewMetrics(reg *prometheus.Registry) *Metrics {
 	m := &Metrics{
 		Reqs: prometheus.NewCounterVec(
 			prometheus.CounterOpts{Name: "http_requests_total", Help: "Total HTTP requests"},
@@ -24,7 +24,8 @@ func NewMetrics() *Metrics {
 			[]string{"service", "method", "path"},
 		),
 	}
-	prometheus.MustRegister(m.Reqs, m.Latenc)
+
+	reg.MustRegister(m.Reqs, m.Latenc)
 	return m
 }
 
