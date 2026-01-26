@@ -17,7 +17,7 @@ const maxBodyBytes = 1 << 20
 
 type Server struct {
 	Log   *zap.Logger
-	Store *Store
+	Store UserStore
 	JWT   *TokenMaker
 }
 

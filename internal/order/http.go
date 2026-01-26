@@ -13,7 +13,7 @@ import (
 )
 
 type Server struct {
-	Store   *Store
+	Store   Store
 	Catalog *CatalogClient
 }
 
@@ -75,7 +75,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Status:     "NEW",
 		CreatedAt:  now,
 	}
-	s.Store.Put(o)
+	s.Store.Create(o)
 
 	kit.WriteJSON(w, http.StatusCreated, o)
 }
@@ -88,7 +88,11 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := chi.URLParam(r, "id")
-	o, ok := s.Store.Get(id)
+	o, ok, err := s.Store.Get(id)
+	if err != nil {
+		kit.WriteError(w, r, http.StatusInternalServerError, "server error", nil)
+		return
+	}
 	if !ok {
 		kit.WriteError(w, r, http.StatusNotFound, "not found", map[string]any{"id": id})
 		return

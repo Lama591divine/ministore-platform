@@ -9,7 +9,7 @@ import (
 )
 
 type Server struct {
-	Store *Store
+	Store Store
 }
 
 func (s *Server) Routes() http.Handler {
@@ -24,14 +24,23 @@ func (s *Server) Routes() http.Handler {
 	return r
 }
 
-func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
-	products := s.Store.ListSortedByID()
+func (s *Server) list(w http.ResponseWriter, r *http.Request) {
+	products, err := s.Store.ListSortedByID()
+	if err != nil {
+		kit.WriteError(w, r, http.StatusInternalServerError, "server error", nil)
+		return
+	}
 	kit.WriteJSON(w, http.StatusOK, products)
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	p, ok := s.Store.Get(id)
+
+	p, ok, err := s.Store.Get(id)
+	if err != nil {
+		kit.WriteError(w, r, http.StatusInternalServerError, "server error", nil)
+		return
+	}
 	if !ok {
 		kit.WriteError(w, r, http.StatusNotFound, "not found", map[string]any{"id": id})
 		return

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
@@ -18,9 +20,22 @@ func main() {
 	port := getenv("PORT", "8081")
 	jwtSecret := getenv("JWT_SECRET", "dev-secret")
 
+	dsn := getenv("POSTGRES_DSN", "")
+	if dsn == "" {
+		log.Fatal("POSTGRES_DSN is required")
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		log.Fatal("db open", zap.Error(err))
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatal("db ping", zap.Error(err))
+	}
+
 	s := &auth.Server{
 		Log:   log,
-		Store: auth.NewStore(),
+		Store: auth.NewPostgresStore(db),
 		JWT:   auth.NewTokenMaker(jwtSecret),
 	}
 

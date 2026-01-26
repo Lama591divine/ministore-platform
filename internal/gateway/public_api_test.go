@@ -21,7 +21,7 @@ func newAuthTS(t *testing.T, jwtSecret string) *httptest.Server {
 
 	s := &auth.Server{
 		Log:   zap.NewNop(),
-		Store: auth.NewStore(),
+		Store: auth.NewMemStore(),
 		JWT:   auth.NewTokenMaker(jwtSecret),
 	}
 

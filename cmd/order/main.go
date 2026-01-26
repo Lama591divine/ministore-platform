@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
@@ -17,9 +19,24 @@ func main() {
 
 	port := getenv("PORT", "8083")
 	catalogURL := getenv("CATALOG_URL", "http://localhost:8082")
+	dsn := getenv("POSTGRES_DSN", "")
+
+	var store order.Store
+	if dsn != "" {
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			log.Fatal("db open", zap.Error(err))
+		}
+		if err := db.Ping(); err != nil {
+			log.Fatal("db ping", zap.Error(err))
+		}
+		store = order.NewPostgresStore(db)
+	} else {
+		store = order.NewMemStore()
+	}
 
 	s := &order.Server{
-		Store:   order.NewStore(),
+		Store:   store,
 		Catalog: order.NewCatalogClient(catalogURL),
 	}
 
