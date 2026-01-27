@@ -1,6 +1,9 @@
 package auth
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 var (
 	ErrEmailExists        = errors.New("email already exists")
@@ -15,6 +18,7 @@ type User struct {
 }
 
 type UserStore interface {
-	Create(email, password, role, id string) error
-	Verify(email, password string) (User, error)
+	Create(ctx context.Context, email, password, role, id string) error
+	Verify(ctx context.Context, email, password string) (User, error)
+	Ping(ctx context.Context) error
 }

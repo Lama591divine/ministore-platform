@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -25,7 +28,20 @@ func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+		defer cancel()
+
+		if err := s.Store.Ping(ctx); err != nil {
+			if s.Log != nil {
+				s.Log.Warn("readyz failed", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "not ready", nil)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
 	r.Post("/auth/register", s.handleRegister)
 	r.Post("/auth/login", s.handleLogin)
@@ -41,12 +57,18 @@ type registerReq struct {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	defer func() { _ = r.Body.Close() }()
 
 	var req registerReq
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
+
 	if err := dec.Decode(&req); err != nil {
-		kit.WriteError(w, r, http.StatusBadRequest, "bad json", map[string]any{"cause": err.Error()})
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
 		return
 	}
 
@@ -64,8 +86,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	id := "u_" + uuid.NewString()
 
-	if err := s.Store.Create(req.Email, req.Password, "user", id); err != nil {
-		kit.WriteError(w, r, http.StatusConflict, err.Error(), nil)
+	if err := s.Store.Create(r.Context(), req.Email, req.Password, "user", id); err != nil {
+		switch err {
+		case ErrEmailExists:
+			kit.WriteError(w, r, http.StatusConflict, "email already exists", nil)
+		default:
+			if s.Log != nil {
+				s.Log.Error("register failed", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusInternalServerError, "server error", nil)
+		}
 		return
 	}
 
@@ -83,12 +113,18 @@ type loginResp struct {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	defer func() { _ = r.Body.Close() }()
 
 	var req loginReq
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
+
 	if err := dec.Decode(&req); err != nil {
-		kit.WriteError(w, r, http.StatusBadRequest, "bad json", map[string]any{"cause": err.Error()})
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		kit.WriteError(w, r, http.StatusBadRequest, "bad json", nil)
 		return
 	}
 
@@ -100,15 +136,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := s.Store.Verify(req.Email, req.Password)
+	u, err := s.Store.Verify(r.Context(), req.Email, req.Password)
 	if err != nil {
 		kit.WriteError(w, r, http.StatusUnauthorized, "invalid credentials", nil)
+
+		if s.Log != nil && !errors.Is(err, ErrInvalidCredentials) {
+			s.Log.Warn("login verify failed", zap.Error(err))
+		}
 		return
 	}
 
 	tok, err := s.JWT.New(u.ID, u.Email, u.Role, 15*time.Minute)
 	if err != nil {
-		s.Log.Error("token issue", zap.Error(err))
+		if s.Log != nil {
+			s.Log.Error("token issue", zap.Error(err))
+		}
 		kit.WriteError(w, r, http.StatusInternalServerError, "server error", nil)
 		return
 	}

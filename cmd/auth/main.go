@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,7 +31,16 @@ func main() {
 	if err != nil {
 		log.Fatal("db open", zap.Error(err))
 	}
-	if err := db.Ping(); err != nil {
+	defer func() { _ = db.Close() }()
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		log.Fatal("db ping", zap.Error(err))
 	}
 

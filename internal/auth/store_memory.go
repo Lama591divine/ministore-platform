@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -16,7 +17,9 @@ func NewMemStore() *MemStore {
 	return &MemStore{byEmail: make(map[string]User)}
 }
 
-func (s *MemStore) Create(email, password, role, id string) error {
+func (s *MemStore) Ping(ctx context.Context) error { return nil }
+
+func (s *MemStore) Create(ctx context.Context, email, password, role, id string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
 	password = strings.TrimSpace(password)
 
@@ -36,8 +39,9 @@ func (s *MemStore) Create(email, password, role, id string) error {
 	return nil
 }
 
-func (s *MemStore) Verify(email, password string) (User, error) {
+func (s *MemStore) Verify(ctx context.Context, email, password string) (User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	password = strings.TrimSpace(password)
 
 	s.mu.RLock()
 	u, ok := s.byEmail[email]

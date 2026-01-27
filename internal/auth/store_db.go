@@ -19,7 +19,13 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-func (s *PostgresStore) Create(email, password, role, id string) error {
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	return s.db.PingContext(ctx)
+}
+
+func (s *PostgresStore) Create(ctx context.Context, email, password, role, id string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
 	password = strings.TrimSpace(password)
 
@@ -28,7 +34,7 @@ func (s *PostgresStore) Create(email, password, role, id string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	_, err = s.db.ExecContext(ctx, `
@@ -45,10 +51,11 @@ func (s *PostgresStore) Create(email, password, role, id string) error {
 	return nil
 }
 
-func (s *PostgresStore) Verify(email, password string) (User, error) {
+func (s *PostgresStore) Verify(ctx context.Context, email, password string) (User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	password = strings.TrimSpace(password)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	var u User
