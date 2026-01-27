@@ -14,8 +14,14 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-func (s *PostgresStore) Create(o Order) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	return s.db.PingContext(ctx)
+}
+
+func (s *PostgresStore) Create(ctx context.Context, o Order) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -50,8 +56,8 @@ func (s *PostgresStore) Create(o Order) error {
 	return tx.Commit()
 }
 
-func (s *PostgresStore) Get(id string) (Order, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *PostgresStore) Get(ctx context.Context, id string) (Order, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	var o Order

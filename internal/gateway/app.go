@@ -1,7 +1,11 @@
 package gateway
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -27,15 +31,15 @@ type Deps struct {
 }
 
 func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
-	authProxy, err := ReverseProxy(deps.AuthURL)
+	authProxy, err := NewReverseProxy(deps.AuthURL, httpDeps.Log)
 	if err != nil {
 		return nil, err
 	}
-	catalogProxy, err := ReverseProxy(deps.CatalogURL)
+	catalogProxy, err := NewReverseProxy(deps.CatalogURL, httpDeps.Log)
 	if err != nil {
 		return nil, err
 	}
-	orderProxy, err := ReverseProxy(deps.OrderURL)
+	orderProxy, err := NewReverseProxy(deps.OrderURL, httpDeps.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +58,35 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 	}
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 900*time.Millisecond)
+		defer cancel()
+
+		if err := checkReady(ctx, deps.AuthURL+"/readyz"); err != nil {
+			if httpDeps.Log != nil {
+				httpDeps.Log.Warn("readyz failed: auth", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "auth not ready", nil)
+			return
+		}
+		if err := checkReady(ctx, deps.CatalogURL+"/readyz"); err != nil {
+			if httpDeps.Log != nil {
+				httpDeps.Log.Warn("readyz failed: catalog", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "catalog not ready", nil)
+			return
+		}
+		if err := checkReady(ctx, deps.OrderURL+"/readyz"); err != nil {
+			if httpDeps.Log != nil {
+				httpDeps.Log.Warn("readyz failed: order", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "order not ready", nil)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
 
 	r.Handle("/auth", authProxy)
 	r.Handle("/auth/*", authProxy)
@@ -71,4 +103,26 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 	})
 
 	return r, nil
+}
+
+func checkReady(ctx context.Context, url string) error {
+	client := &http.Client{
+		Timeout: 600 * time.Millisecond,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status=%d", resp.StatusCode)
+	}
+	return nil
 }

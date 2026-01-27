@@ -1,6 +1,9 @@
 package order
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Item struct {
 	ProductID string `json:"product_id"`
@@ -17,6 +20,7 @@ type Order struct {
 }
 
 type Store interface {
-	Create(o Order) error
-	Get(id string) (Order, bool, error)
+	Create(ctx context.Context, o Order) error
+	Get(ctx context.Context, id string) (Order, bool, error)
+	Ping(ctx context.Context) error
 }

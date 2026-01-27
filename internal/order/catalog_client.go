@@ -48,7 +48,7 @@ func (c *CatalogClient) GetProduct(ctx context.Context, id string) (CatalogProdu
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return CatalogProduct{}, ErrCatalogUnavailable
 		}
 		var ne net.Error

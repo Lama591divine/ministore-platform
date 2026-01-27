@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
@@ -22,14 +24,25 @@ func main() {
 	dsn := getenv("POSTGRES_DSN", "")
 
 	var store order.Store
+
 	if dsn != "" {
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {
 			log.Fatal("db open", zap.Error(err))
 		}
-		if err := db.Ping(); err != nil {
+		defer func() { _ = db.Close() }()
+
+		db.SetMaxOpenConns(20)
+		db.SetMaxIdleConns(10)
+		db.SetConnMaxLifetime(30 * time.Minute)
+		db.SetConnMaxIdleTime(5 * time.Minute)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
 			log.Fatal("db ping", zap.Error(err))
 		}
+
 		store = order.NewPostgresStore(db)
 	} else {
 		store = order.NewMemStore()
@@ -38,6 +51,7 @@ func main() {
 	s := &order.Server{
 		Store:   store,
 		Catalog: order.NewCatalogClient(catalogURL),
+		Log:     log,
 	}
 
 	reg := prometheus.NewRegistry()

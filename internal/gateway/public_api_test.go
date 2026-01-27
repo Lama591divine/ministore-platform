@@ -36,7 +36,10 @@ func newAuthTS(t *testing.T, jwtSecret string) *httptest.Server {
 func newCatalogTS(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	s := &catalog.Server{Store: catalog.NewStore()}
+	s := &catalog.Server{
+		Store: catalog.NewMemStore(),
+		Log:   zap.NewNop(),
+	}
 
 	h := catalog.NewHandler(s, catalog.HTTPDeps{
 		Log:     zap.NewNop(),
@@ -50,8 +53,9 @@ func newOrderTS(t *testing.T, catalogURL string) *httptest.Server {
 	t.Helper()
 
 	s := &order.Server{
-		Store:   order.NewStore(),
+		Store:   order.NewMemStore(),
 		Catalog: order.NewCatalogClient(catalogURL),
+		Log:     zap.NewNop(),
 	}
 
 	h := order.NewHandler(s, order.HTTPDeps{
@@ -75,7 +79,6 @@ func newGatewayTS(t *testing.T, jwtSecret, authURL, catalogURL, orderURL string)
 		gateway.HTTPDeps{
 			Log:     zap.NewNop(),
 			Service: "gateway",
-			// Registry: nil
 		},
 	)
 	if err != nil {
@@ -119,6 +122,28 @@ func doJSON(t *testing.T, c *http.Client, method, url string, body any, headers 
 		t.Fatalf("read body: %v", err)
 	}
 	return resp, raw
+}
+
+func TestGateway_PublicAPI_Readyz(t *testing.T) {
+	const jwtSecret = "test-secret"
+
+	authTS := newAuthTS(t, jwtSecret)
+	t.Cleanup(authTS.Close)
+
+	catalogTS := newCatalogTS(t)
+	t.Cleanup(catalogTS.Close)
+
+	orderTS := newOrderTS(t, catalogTS.URL)
+	t.Cleanup(orderTS.Close)
+
+	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
+	t.Cleanup(gwTS.Close)
+
+	c := &http.Client{}
+	resp, raw := doJSON(t, c, http.MethodGet, gwTS.URL+"/readyz", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readyz status=%d body=%s", resp.StatusCode, string(raw))
+	}
 }
 
 func TestGateway_PublicAPI_HappyPath(t *testing.T) {
