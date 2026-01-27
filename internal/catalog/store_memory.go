@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"sort"
 	"sync"
 )
@@ -17,11 +18,9 @@ func NewMemStore() *MemStore {
 	return s
 }
 
-func NewStore() Store {
-	return NewMemStore()
-}
+func (s *MemStore) Ping(ctx context.Context) error { return nil }
 
-func (s *MemStore) ListSortedByID() ([]Product, error) {
+func (s *MemStore) ListSortedByID(ctx context.Context) ([]Product, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -34,7 +33,7 @@ func (s *MemStore) ListSortedByID() ([]Product, error) {
 	return out, nil
 }
 
-func (s *MemStore) Get(id string) (Product, bool, error) {
+func (s *MemStore) Get(ctx context.Context, id string) (Product, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -14,8 +14,14 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-func (s *PostgresStore) ListSortedByID() ([]Product, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	return s.db.PingContext(ctx)
+}
+
+func (s *PostgresStore) ListSortedByID(ctx context.Context) ([]Product, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -42,8 +48,8 @@ func (s *PostgresStore) ListSortedByID() ([]Product, error) {
 	return out, nil
 }
 
-func (s *PostgresStore) Get(id string) (Product, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+func (s *PostgresStore) Get(ctx context.Context, id string) (Product, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	var p Product

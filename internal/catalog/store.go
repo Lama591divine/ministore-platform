@@ -1,5 +1,7 @@
 package catalog
 
+import "context"
+
 type Product struct {
 	ID         string `json:"id"`
 	Title      string `json:"title"`
@@ -7,6 +9,7 @@ type Product struct {
 }
 
 type Store interface {
-	ListSortedByID() ([]Product, error)
-	Get(id string) (Product, bool, error)
+	ListSortedByID(ctx context.Context) ([]Product, error)
+	Get(ctx context.Context, id string) (Product, bool, error)
+	Ping(ctx context.Context) error
 }
