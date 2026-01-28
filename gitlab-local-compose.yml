@@ -1,0 +1,38 @@
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:17.9.1-ce.0
+    container_name: gitlab
+    hostname: gitlab.local
+    shm_size: 256m
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8088'
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+    ports:
+      - "8088:80"
+      - "2222:22"
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    restart: unless-stopped
+
+  runner:
+    image: gitlab/gitlab-runner:alpine-v17.9.1
+    container_name: gitlab-runner
+    depends_on:
+      - gitlab
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - runner_config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  runner_config:

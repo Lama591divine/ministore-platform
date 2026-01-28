@@ -1,17 +1,39 @@
 services:
+  e2e:
+    image: golang:1.25
+    working_dir: /src
+    volumes:
+      - ./:/src
+    environment:
+      - E2E_BASE_URL=http://gateway:8080
+    depends_on:
+      gateway:
+        condition: service_started
+    command:
+      - bash
+      - -lc
+      - |
+        # wait until gateway port is open (max ~60s)
+        for i in {1..60}; do
+          (echo > /dev/tcp/gateway/8080) >/dev/null 2>&1 && break
+          sleep 1
+        done
+        go test -tags=integration ./...
+    networks: [ backend ]
+
   postgres_auth:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: authdb
-    ports:
-      - "5433:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d authdb" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+      test: [ "CMD-SHELL", "psql -U postgres -d authdb -c 'SELECT 1' >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    networks: [ backend ]
 
   postgres_catalog:
     image: postgres:16
@@ -19,13 +41,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: catalogdb
-    ports:
-      - "5434:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d catalogdb" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+      test: [ "CMD-SHELL", "psql -U postgres -d catalogdb -c 'SELECT 1' >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    networks: [ backend ]
 
   postgres_order:
     image: postgres:16
@@ -33,13 +55,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: orderdb
-    ports:
-      - "5435:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d orderdb" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+      test: [ "CMD-SHELL", "psql -U postgres -d orderdb -c 'SELECT 1' >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    networks: [ backend ]
 
   migrate_auth:
     image: migrate/migrate:v4.17.1
@@ -48,7 +70,13 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations/auth:/migrations
-    command: [ "-path","/migrations","-database","postgres://postgres:postgres@postgres_auth:5432/authdb?sslmode=disable","up" ]
+    command:
+      - "-path"
+      - "/migrations"
+      - "-database"
+      - "postgres://postgres:postgres@postgres_auth:5432/authdb?sslmode=disable"
+      - "up"
+    networks: [ backend ]
 
   migrate_catalog:
     image: migrate/migrate:v4.17.1
@@ -57,7 +85,13 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations/catalog:/migrations
-    command: [ "-path","/migrations","-database","postgres://postgres:postgres@postgres_catalog:5432/catalogdb?sslmode=disable","up" ]
+    command:
+      - "-path"
+      - "/migrations"
+      - "-database"
+      - "postgres://postgres:postgres@postgres_catalog:5432/catalogdb?sslmode=disable"
+      - "up"
+    networks: [ backend ]
 
   migrate_order:
     image: migrate/migrate:v4.17.1
@@ -66,7 +100,13 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations/order:/migrations
-    command: [ "-path","/migrations","-database","postgres://postgres:postgres@postgres_order:5432/orderdb?sslmode=disable","up" ]
+    command:
+      - "-path"
+      - "/migrations"
+      - "-database"
+      - "postgres://postgres:postgres@postgres_order:5432/orderdb?sslmode=disable"
+      - "up"
+    networks: [ backend ]
 
   auth:
     build:
@@ -76,18 +116,13 @@ services:
         GO_VERSION: "1.25"
     environment:
       - PORT=8081
-      - JWT_SECRET=dev-secret
+      - JWT_SECRET=${JWT_SECRET}
+      - METRICS_TOKEN=${METRICS_TOKEN}
       - POSTGRES_DSN=postgres://postgres:postgres@postgres_auth:5432/authdb?sslmode=disable
-    ports:
-      - "8081:8081"
     depends_on:
       migrate_auth:
         condition: service_completed_successfully
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8081/readyz >/dev/null 2>&1 || exit 1" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+    networks: [ backend ]
 
   catalog:
     build:
@@ -97,17 +132,12 @@ services:
         GO_VERSION: "1.25"
     environment:
       - PORT=8082
+      - METRICS_TOKEN=${METRICS_TOKEN}
       - POSTGRES_DSN=postgres://postgres:postgres@postgres_catalog:5432/catalogdb?sslmode=disable
-    ports:
-      - "8082:8082"
     depends_on:
       migrate_catalog:
         condition: service_completed_successfully
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8082/readyz >/dev/null 2>&1 || exit 1" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+    networks: [ backend ]
 
   order:
     build:
@@ -117,20 +147,16 @@ services:
         GO_VERSION: "1.25"
     environment:
       - PORT=8083
+      - JWT_SECRET=${JWT_SECRET}
+      - METRICS_TOKEN=${METRICS_TOKEN}
       - CATALOG_URL=http://catalog:8082
       - POSTGRES_DSN=postgres://postgres:postgres@postgres_order:5432/orderdb?sslmode=disable
-    ports:
-      - "8083:8083"
     depends_on:
       migrate_order:
         condition: service_completed_successfully
       catalog:
-        condition: service_healthy
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8083/readyz >/dev/null 2>&1 || exit 1" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+        condition: service_started
+    networks: [ backend ]
 
   gateway:
     build:
@@ -140,7 +166,8 @@ services:
         GO_VERSION: "1.25"
     environment:
       - PORT=8080
-      - JWT_SECRET=dev-secret
+      - JWT_SECRET=${JWT_SECRET}
+      - METRICS_TOKEN=${METRICS_TOKEN}
       - AUTH_URL=http://auth:8081
       - CATALOG_URL=http://catalog:8082
       - ORDER_URL=http://order:8083
@@ -148,13 +175,14 @@ services:
       - "8080:8080"
     depends_on:
       auth:
-        condition: service_healthy
+        condition: service_started
       catalog:
-        condition: service_healthy
+        condition: service_started
       order:
-        condition: service_healthy
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/readyz >/dev/null 2>&1 || exit 1" ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
+        condition: service_started
+    networks: [ frontend, backend ]
+
+networks:
+  frontend: { }
+  backend:
+    internal: true

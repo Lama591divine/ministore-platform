@@ -1,0 +1,52 @@
+stages:
+  - lint
+  - test
+  - integration
+
+variables:
+  GO_VERSION: "1.25"
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/gomod"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/gocache"
+  DOCKER_BUILDKIT: "1"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .cache/gomod
+    - .cache/gocache
+
+lint:
+  stage: lint
+  image: golang:${GO_VERSION}
+  script:
+    - test -z "$(gofmt -l .)" || (echo "gofmt required"; gofmt -l .; exit 1)
+    - go vet ./...
+
+unit_tests:
+  stage: test
+  image: golang:${GO_VERSION}
+  script:
+    - go test ./... -shuffle=on
+
+integration_tests:
+  stage: integration
+  image: docker:27
+  before_script:
+    - apk add --no-cache docker-cli-compose bash
+    - test -n "$JWT_SECRET" || (echo "JWT_SECRET is empty" && exit 1)
+    - test ${#JWT_SECRET} -ge 32 || (echo "JWT_SECRET must be >= 32 chars" && exit 1)
+    - test -n "$METRICS_TOKEN" || (echo "METRICS_TOKEN is empty" && exit 1)
+    - printf "JWT_SECRET=%s\nMETRICS_TOKEN=%s\n" "$JWT_SECRET" "$METRICS_TOKEN" > .env
+  script:
+    - docker version
+    - docker compose version
+    - docker compose -f docker-compose.integration.yml up -d --build
+    - docker compose -f docker-compose.integration.yml run --rm e2e
+  after_script:
+    - docker compose -f docker-compose.integration.yml logs --no-color > compose.logs || true
+    - docker compose -f docker-compose.integration.yml down -v || true
+  artifacts:
+    when: always
+    paths:
+      - compose.logs
