@@ -20,7 +20,10 @@ import (
 type HTTPDeps struct {
 	Log      *zap.Logger
 	Service  string
-	Registry *prometheus.Registry // nil => без метрик
+	Registry *prometheus.Registry
+
+	MetricsEnabled bool
+	MetricsToken   string
 }
 
 type Deps struct {
@@ -28,6 +31,14 @@ type Deps struct {
 	CatalogURL string
 	OrderURL   string
 	JWTSecret  string
+}
+
+var readyClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     30 * time.Second,
+	},
 }
 
 func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
@@ -54,13 +65,17 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 	if httpDeps.Registry != nil {
 		metrics := kit.NewMetrics(httpDeps.Registry)
 		r.Use(metrics.Middleware(httpDeps.Service, kit.ChiRoutePatternOrPath))
-		r.Handle("/metrics", promhttp.HandlerFor(httpDeps.Registry, promhttp.HandlerOpts{}))
+
+		if httpDeps.MetricsEnabled {
+			r.With(kit.MetricsAuth(httpDeps.MetricsToken)).
+				Handle("/metrics", promhttp.HandlerFor(httpDeps.Registry, promhttp.HandlerOpts{}))
+		}
 	}
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 900*time.Millisecond)
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
 		if err := checkReady(ctx, deps.AuthURL+"/readyz"); err != nil {
@@ -96,8 +111,6 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 
 	r.Group(func(pr chi.Router) {
 		pr.Use(AuthJWT(j))
-		pr.Use(InjectHeaders)
-
 		pr.Handle("/orders", orderProxy)
 		pr.Handle("/orders/*", orderProxy)
 	})
@@ -106,15 +119,14 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 }
 
 func checkReady(ctx context.Context, url string) error {
-	client := &http.Client{
-		Timeout: 600 * time.Millisecond,
-	}
+	cctx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := client.Do(req)
+	resp, err := readyClient.Do(req)
 	if err != nil {
 		return err
 	}

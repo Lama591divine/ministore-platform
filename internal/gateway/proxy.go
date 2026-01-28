@@ -111,19 +111,3 @@ func NewReverseProxy(target string, log *zap.Logger) (*httputil.ReverseProxy, er
 
 	return p, nil
 }
-
-func InjectHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Header.Del("X-User-Id")
-		r.Header.Del("X-User-Role")
-
-		if uid, ok := UserIDFromContext(r.Context()); ok && uid != "" {
-			r.Header.Set("X-User-Id", uid)
-		}
-		if role, ok := UserRoleFromContext(r.Context()); ok && role != "" {
-			r.Header.Set("X-User-Role", role)
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}

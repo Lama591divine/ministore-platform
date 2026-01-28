@@ -16,6 +16,8 @@ import (
 	"MiniStore/internal/order"
 )
 
+const jwtSecret = "test-secret-32-chars-minimum-........"
+
 func newAuthTS(t *testing.T, jwtSecret string) *httptest.Server {
 	t.Helper()
 
@@ -49,7 +51,7 @@ func newCatalogTS(t *testing.T) *httptest.Server {
 	return httptest.NewServer(h)
 }
 
-func newOrderTS(t *testing.T, catalogURL string) *httptest.Server {
+func newOrderTS(t *testing.T, jwtSecret, catalogURL string) *httptest.Server {
 	t.Helper()
 
 	s := &order.Server{
@@ -59,8 +61,9 @@ func newOrderTS(t *testing.T, catalogURL string) *httptest.Server {
 	}
 
 	h := order.NewHandler(s, order.HTTPDeps{
-		Log:     zap.NewNop(),
-		Service: "order",
+		Log:       zap.NewNop(),
+		Service:   "order",
+		JWTSecret: jwtSecret,
 	})
 
 	return httptest.NewServer(h)
@@ -125,15 +128,13 @@ func doJSON(t *testing.T, c *http.Client, method, url string, body any, headers 
 }
 
 func TestGateway_PublicAPI_Readyz(t *testing.T) {
-	const jwtSecret = "test-secret"
-
 	authTS := newAuthTS(t, jwtSecret)
 	t.Cleanup(authTS.Close)
 
 	catalogTS := newCatalogTS(t)
 	t.Cleanup(catalogTS.Close)
 
-	orderTS := newOrderTS(t, catalogTS.URL)
+	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
 	t.Cleanup(orderTS.Close)
 
 	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
@@ -147,15 +148,13 @@ func TestGateway_PublicAPI_Readyz(t *testing.T) {
 }
 
 func TestGateway_PublicAPI_HappyPath(t *testing.T) {
-	const jwtSecret = "test-secret"
-
 	authTS := newAuthTS(t, jwtSecret)
 	t.Cleanup(authTS.Close)
 
 	catalogTS := newCatalogTS(t)
 	t.Cleanup(catalogTS.Close)
 
-	orderTS := newOrderTS(t, catalogTS.URL)
+	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
 	t.Cleanup(orderTS.Close)
 
 	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
@@ -164,13 +163,13 @@ func TestGateway_PublicAPI_HappyPath(t *testing.T) {
 	c := &http.Client{}
 
 	{
-		resp, _ := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/register", map[string]any{
+		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/register", map[string]any{
 			"email":    "user@example.com",
 			"password": "password123",
 		}, nil)
 
 		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("register status=%d", resp.StatusCode)
+			t.Fatalf("register status=%d body=%s", resp.StatusCode, string(raw))
 		}
 	}
 
@@ -250,15 +249,13 @@ func TestGateway_PublicAPI_HappyPath(t *testing.T) {
 }
 
 func TestGateway_PublicAPI_OrdersRequiresAuth(t *testing.T) {
-	const jwtSecret = "test-secret"
-
 	authTS := newAuthTS(t, jwtSecret)
 	t.Cleanup(authTS.Close)
 
 	catalogTS := newCatalogTS(t)
 	t.Cleanup(catalogTS.Close)
 
-	orderTS := newOrderTS(t, catalogTS.URL)
+	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
 	t.Cleanup(orderTS.Close)
 
 	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
@@ -269,6 +266,65 @@ func TestGateway_PublicAPI_OrdersRequiresAuth(t *testing.T) {
 	resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/orders", map[string]any{
 		"items": []map[string]any{{"product_id": "p1", "qty": 1}},
 	}, nil)
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(raw))
+	}
+}
+
+func TestGateway_PublicAPI_InvalidTokenRejected(t *testing.T) {
+	authTS := newAuthTS(t, jwtSecret)
+	t.Cleanup(authTS.Close)
+
+	catalogTS := newCatalogTS(t)
+	t.Cleanup(catalogTS.Close)
+
+	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
+	t.Cleanup(orderTS.Close)
+
+	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
+	t.Cleanup(gwTS.Close)
+
+	c := &http.Client{}
+
+	{
+		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/register", map[string]any{
+			"email":    "user2@example.com",
+			"password": "password123",
+		}, nil)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("register status=%d body=%s", resp.StatusCode, string(raw))
+		}
+	}
+
+	var tok string
+	{
+		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/login", map[string]any{
+			"email":    "user2@example.com",
+			"password": "password123",
+		}, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("login status=%d body=%s", resp.StatusCode, string(raw))
+		}
+		var lr struct {
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.Unmarshal(raw, &lr); err != nil {
+			t.Fatalf("decode login: %v body=%s", err, string(raw))
+		}
+		tok = lr.AccessToken
+	}
+
+	if len(tok) < 5 {
+		t.Fatalf("token too short")
+	}
+	badTok := tok[:len(tok)-1] + "x"
+
+	resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/orders", map[string]any{
+		"items": []map[string]any{{"product_id": "p1", "qty": 1}},
+	}, map[string]string{
+		"Authorization": "Bearer " + badTok,
+	})
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, string(raw))

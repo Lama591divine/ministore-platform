@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"MiniStore/internal/auth"
 	"MiniStore/pkg/kit"
 )
 
@@ -22,15 +23,23 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return u, ok
 }
 
-func RequireUserHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid := strings.TrimSpace(r.Header.Get("X-User-Id"))
-		if uid == "" {
-			kit.WriteError(w, r, http.StatusUnauthorized, "missing X-User-Id", nil)
-			return
-		}
-		role := strings.TrimSpace(r.Header.Get("X-User-Role"))
-		ctx := context.WithValue(r.Context(), userKey, User{ID: uid, Role: role})
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+func AuthJWT(jwt *auth.TokenMaker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authz := r.Header.Get("Authorization")
+			if !strings.HasPrefix(authz, "Bearer ") {
+				kit.WriteError(w, r, http.StatusUnauthorized, "missing token", nil)
+				return
+			}
+
+			claims, err := jwt.Parse(strings.TrimPrefix(authz, "Bearer "))
+			if err != nil || claims.UserID == "" {
+				kit.WriteError(w, r, http.StatusUnauthorized, "invalid token", nil)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), userKey, User{ID: claims.UserID, Role: claims.Role})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }

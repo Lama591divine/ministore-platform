@@ -20,9 +20,13 @@ func main() {
 	defer func() { _ = log.Sync() }()
 
 	port := getenv("PORT", "8081")
-	jwtSecret := getenv("JWT_SECRET", "dev-secret")
 
-	dsn := getenv("POSTGRES_DSN", "")
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET is required and must be at least 32 chars")
+	}
+
+	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
 		log.Fatal("POSTGRES_DSN is required")
 	}
@@ -51,7 +55,13 @@ func main() {
 	}
 
 	reg := prometheus.NewRegistry()
-	h := auth.NewHandler(s, auth.HTTPDeps{Log: log, Service: service, Registry: reg})
+	h := auth.NewHandler(s, auth.HTTPDeps{
+		Log:            log,
+		Service:        service,
+		Registry:       reg,
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+	})
 
 	if err := kit.RunHTTPServer(":"+port, h, log); err != nil {
 		log.Fatal("http server stopped", zap.Error(err))

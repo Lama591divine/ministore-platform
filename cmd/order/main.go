@@ -20,11 +20,19 @@ func main() {
 	defer func() { _ = log.Sync() }()
 
 	port := getenv("PORT", "8083")
-	catalogURL := getenv("CATALOG_URL", "http://localhost:8082")
-	dsn := getenv("POSTGRES_DSN", "")
+	catalogURL := getenv("CATALOG_URL", "http://catalog:8082")
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET is required and must be at least 32 chars")
+	}
+
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" && os.Getenv("ALLOW_MEMSTORE") != "1" {
+		log.Fatal("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+	}
 
 	var store order.Store
-
 	if dsn != "" {
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {
@@ -55,7 +63,14 @@ func main() {
 	}
 
 	reg := prometheus.NewRegistry()
-	h := order.NewHandler(s, order.HTTPDeps{Log: log, Service: service, Registry: reg})
+	h := order.NewHandler(s, order.HTTPDeps{
+		Log:            log,
+		Service:        service,
+		Registry:       reg,
+		JWTSecret:      jwtSecret,
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+	})
 
 	if err := kit.RunHTTPServer(":"+port, h, log); err != nil {
 		log.Fatal("http server stopped", zap.Error(err))

@@ -1,3 +1,4 @@
+// cmd/catalog/main.go
 package main
 
 import (
@@ -20,7 +21,11 @@ func main() {
 	defer func() { _ = log.Sync() }()
 
 	port := getenv("PORT", "8082")
-	dsn := getenv("POSTGRES_DSN", "")
+
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" && os.Getenv("ALLOW_MEMSTORE") != "1" {
+		log.Fatal("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+	}
 
 	var store catalog.Store
 	if dsn != "" {
@@ -52,7 +57,13 @@ func main() {
 	}
 
 	reg := prometheus.NewRegistry()
-	h := catalog.NewHandler(s, catalog.HTTPDeps{Log: log, Service: service, Registry: reg})
+	h := catalog.NewHandler(s, catalog.HTTPDeps{
+		Log:            log,
+		Service:        service,
+		Registry:       reg,
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+	})
 
 	if err := kit.RunHTTPServer(":"+port, h, log); err != nil {
 		log.Fatal("http server stopped", zap.Error(err))

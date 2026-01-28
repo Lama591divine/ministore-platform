@@ -17,15 +17,26 @@ func main() {
 
 	port := getenv("PORT", "8080")
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET is required and must be at least 32 chars")
+	}
+
 	deps := gateway.Deps{
-		JWTSecret:  getenv("JWT_SECRET", "dev-secret"),
-		AuthURL:    getenv("AUTH_URL", "http://localhost:8081"),
-		CatalogURL: getenv("CATALOG_URL", "http://localhost:8082"),
-		OrderURL:   getenv("ORDER_URL", "http://localhost:8083"),
+		JWTSecret:  jwtSecret,
+		AuthURL:    getenv("AUTH_URL", "http://auth:8081"),
+		CatalogURL: getenv("CATALOG_URL", "http://catalog:8082"),
+		OrderURL:   getenv("ORDER_URL", "http://order:8083"),
 	}
 
 	reg := prometheus.NewRegistry()
-	h, err := gateway.NewHandler(deps, gateway.HTTPDeps{Log: log, Service: service, Registry: reg})
+	h, err := gateway.NewHandler(deps, gateway.HTTPDeps{
+		Log:            log,
+		Service:        service,
+		Registry:       reg,
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+	})
 	if err != nil {
 		log.Fatal("init gateway handler failed", zap.Error(err))
 	}

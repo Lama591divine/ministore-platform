@@ -58,8 +58,24 @@ func (t *TokenMaker) Parse(tokenStr string) (Claims, error) {
 		return Claims{}, errors.New("invalid token")
 	}
 
-	if c.Issuer != "" && c.Issuer != t.issuer {
+	if c.Issuer != t.issuer {
 		return Claims{}, errors.New("invalid issuer")
+	}
+
+	if c.ExpiresAt == nil {
+		return Claims{}, errors.New("missing exp")
+	}
+	now := time.Now()
+	leeway := 30 * time.Second
+	if now.After(c.ExpiresAt.Time.Add(leeway)) {
+		return Claims{}, errors.New("token expired")
+	}
+
+	if c.UserID == "" {
+		return Claims{}, errors.New("missing user_id")
+	}
+	if c.Subject != "" && c.Subject != c.UserID {
+		return Claims{}, errors.New("invalid subject")
 	}
 
 	return c, nil

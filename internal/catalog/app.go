@@ -1,3 +1,4 @@
+// internal/catalog/http.go
 package catalog
 
 import (
@@ -16,6 +17,9 @@ type HTTPDeps struct {
 	Log      *zap.Logger
 	Service  string
 	Registry *prometheus.Registry
+
+	MetricsEnabled bool
+	MetricsToken   string
 }
 
 func NewHandler(s *Server, deps HTTPDeps) http.Handler {
@@ -27,7 +31,11 @@ func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	if deps.Registry != nil {
 		metrics := kit.NewMetrics(deps.Registry)
 		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
-		r.Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
+
+		if deps.MetricsEnabled {
+			r.With(kit.MetricsAuth(deps.MetricsToken)).
+				Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
+		}
 	}
 
 	r.Mount("/", s.Routes())

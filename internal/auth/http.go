@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -24,30 +23,18 @@ type Server struct {
 	JWT   *TokenMaker
 }
 
-func (s *Server) Routes() http.Handler {
-	r := chi.NewRouter()
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	defer cancel()
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-
-	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
-		defer cancel()
-
-		if err := s.Store.Ping(ctx); err != nil {
-			if s.Log != nil {
-				s.Log.Warn("readyz failed", zap.Error(err))
-			}
-			kit.WriteError(w, r, http.StatusServiceUnavailable, "not ready", nil)
-			return
+	if err := s.Store.Ping(ctx); err != nil {
+		if s.Log != nil {
+			s.Log.Warn("readyz failed", zap.Error(err))
 		}
-		w.WriteHeader(http.StatusOK)
-	})
-
-	r.Post("/auth/register", s.handleRegister)
-	r.Post("/auth/login", s.handleLogin)
-	r.Get("/auth/whoami", s.handleWhoAmI)
-
-	return r
+		kit.WriteError(w, r, http.StatusServiceUnavailable, "not ready", nil)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 type registerReq struct {
@@ -85,7 +72,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := "u_" + uuid.NewString()
-
 	if err := s.Store.Create(r.Context(), req.Email, req.Password, "user", id); err != nil {
 		switch err {
 		case ErrEmailExists:
@@ -139,7 +125,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	u, err := s.Store.Verify(r.Context(), req.Email, req.Password)
 	if err != nil {
 		kit.WriteError(w, r, http.StatusUnauthorized, "invalid credentials", nil)
-
 		if s.Log != nil && !errors.Is(err, ErrInvalidCredentials) {
 			s.Log.Warn("login verify failed", zap.Error(err))
 		}
