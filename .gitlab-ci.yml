@@ -33,6 +33,13 @@ unit_tests:
 integration_tests:
   stage: integration
   image: docker:27
+  services:
+    - name: docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_BUILDKIT: "1"
+    COMPOSE_DOCKER_CLI_BUILD: "1"
   before_script:
     - apk add --no-cache docker-cli-compose bash
     - test -n "$JWT_SECRET" || (echo "JWT_SECRET is empty" && exit 1)
