@@ -41,11 +41,11 @@ integration_tests:
   script:
     - docker version
     - docker compose version
-    - docker compose -f docker-compose.integration.yml up -d --build
-    - docker compose -f docker-compose.integration.yml run --rm e2e
+    - docker compose -f compose.yaml -f docker-compose.integration.yml up -d --build --scale e2e=0
+    - docker compose -f compose.yaml -f docker-compose.integration.yml run --rm e2e
   after_script:
-    - docker compose -f docker-compose.integration.yml logs --no-color > compose.logs || true
-    - docker compose -f docker-compose.integration.yml down -v || true
+    - docker compose -f compose.yaml -f docker-compose.integration.yml logs --no-color > compose.logs || true
+    - docker compose -f compose.yaml -f docker-compose.integration.yml down -v || true
   artifacts:
     when: always
     paths:

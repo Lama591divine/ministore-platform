@@ -1,6 +1,16 @@
 .git
 .idea
 .vscode
-*.log
+
 bin
 dist
+
+*.exe
+*.out
+*.test
+coverage.out
+*.coverprofile
+*.log
+
+*.env
+!.env.example
