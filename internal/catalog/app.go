@@ -1,4 +1,3 @@
-// internal/catalog/http.go
 package catalog
 
 import (

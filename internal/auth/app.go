@@ -28,6 +28,11 @@ func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(deps.Log))
 
+	if deps.MetricsEnabled && deps.Registry != nil {
+		metrics := kit.NewMetrics(deps.Registry)
+		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
+	}
+
 	loginLimiter := kit.NewIPRateLimiter(5, 1*60)
 	registerLimiter := kit.NewIPRateLimiter(3, 1*60)
 
@@ -41,9 +46,6 @@ func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	r.Get("/readyz", s.handleReady)
 
 	if deps.MetricsEnabled && deps.Registry != nil {
-		metrics := kit.NewMetrics(deps.Registry)
-		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
-
 		r.With(kit.MetricsAuth(deps.MetricsToken)).Handle(
 			"/metrics",
 			promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}),
