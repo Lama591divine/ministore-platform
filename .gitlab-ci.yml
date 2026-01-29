@@ -20,7 +20,8 @@ lint:
   stage: lint
   image: golang:${GO_VERSION}
   script:
-    - test -z "$(gofmt -l .)" || (echo "gofmt required"; gofmt -l .; exit 1)
+    - FILES="$(find . -type f -name '*.go' -not -path './.cache/*' -not -path './vendor/*' -not -path './.git/*')"
+    - test -z "$(gofmt -l $FILES)" || (echo "gofmt required"; gofmt -l $FILES; exit 1)
     - go vet ./...
 
 unit_tests:
