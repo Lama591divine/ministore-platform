@@ -182,7 +182,36 @@ services:
         condition: service_started
     networks: [ frontend, backend ]
 
+  prometheus:
+    image: prom/prometheus:v2.51.1
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    environment:
+      - METRICS_TOKEN=${METRICS_TOKEN}
+    depends_on:
+      gateway:
+        condition: service_started
+    networks: [ backend ]
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks: [ backend ]
+
 networks:
-  frontend: { }
+  frontend: {}
   backend:
     internal: true
