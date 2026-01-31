@@ -23,6 +23,7 @@ spec:
           env:
             - { name: PORT, value: "8081" }
             - { name: JWT_SECRET, value: "dev-secret" }
+            - { name: METRICS_TOKEN, value: "dev-metrics-token" }
           ports:
             - { containerPort: 8081 }
           livenessProbe:
@@ -59,6 +60,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - { name: PORT, value: "8082" }
+            - { name: METRICS_TOKEN, value: "dev-metrics-token" }
           ports:
             - { containerPort: 8082 }
           livenessProbe:
@@ -96,6 +98,7 @@ spec:
           env:
             - { name: PORT, value: "8083" }
             - { name: CATALOG_URL, value: "http://catalog:8082" }
+            - { name: METRICS_TOKEN, value: "dev-metrics-token" }
           ports:
             - { containerPort: 8083 }
           livenessProbe:
@@ -136,6 +139,7 @@ spec:
             - { name: AUTH_URL, value: "http://auth:8081" }
             - { name: CATALOG_URL, value: "http://catalog:8082" }
             - { name: ORDER_URL, value: "http://order:8083" }
+            - { name: METRICS_TOKEN, value: "dev-metrics-token" }
           ports:
             - { containerPort: 8080 }
           livenessProbe:
@@ -152,3 +156,147 @@ spec:
   selector: { app: gateway }
   ports:
     - { port: 8080, targetPort: 8080 }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: ministore
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: gateway
+        metrics_path: /metrics
+        bearer_token: "dev-metrics-token"
+        static_configs:
+          - targets: [ "gateway:8080" ]
+      - job_name: auth
+        metrics_path: /metrics
+        bearer_token: "dev-metrics-token"
+        static_configs:
+          - targets: [ "auth:8081" ]
+      - job_name: catalog
+        metrics_path: /metrics
+        bearer_token: "dev-metrics-token"
+        static_configs:
+          - targets: [ "catalog:8082" ]
+      - job_name: order
+        metrics_path: /metrics
+        bearer_token: "dev-metrics-token"
+        static_configs:
+          - targets: [ "order:8083" ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.1
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: ministore
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: ministore
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /etc/grafana/provisioning/dashboards
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.4.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+          volumeMounts:
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning
+      volumes:
+        - name: grafana-provisioning
+          configMap:
+            name: grafana-provisioning
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: ministore
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
