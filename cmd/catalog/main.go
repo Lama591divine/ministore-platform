@@ -1,9 +1,9 @@
-// cmd/catalog/main.go
 package main
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"time"
 
@@ -15,59 +15,110 @@ import (
 	"MiniStore/pkg/kit"
 )
 
+const serviceName = "catalog"
+
+type Config struct {
+	Port          string
+	PostgresDSN   string
+	AllowMemStore bool
+
+	MetricsEnabled bool
+	MetricsToken   string
+}
+
 func main() {
-	service := "catalog"
-	log := kit.NewLogger(service)
-	defer func() { _ = log.Sync() }()
+	log := kit.NewLogger(serviceName)
+	defer func() {
+		_ = log.Sync()
+	}()
 
-	port := getenv("PORT", "8082")
+	if err := run(log); err != nil {
+		log.Fatal("service failed", zap.Error(err))
+	}
+}
 
-	dsn := os.Getenv("POSTGRES_DSN")
-	if dsn == "" && os.Getenv("ALLOW_MEMSTORE") != "1" {
-		log.Fatal("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+func run(log *zap.Logger) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 
-	var store catalog.Store
-	if dsn != "" {
-		db, err := sql.Open("pgx", dsn)
-		if err != nil {
-			log.Fatal("db open", zap.Error(err))
-		}
-		defer func() { _ = db.Close() }()
-
-		db.SetMaxOpenConns(20)
-		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(30 * time.Minute)
-		db.SetConnMaxIdleTime(5 * time.Minute)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
-			log.Fatal("db ping", zap.Error(err))
-		}
-
-		store = catalog.NewPostgresStore(db)
-	} else {
-		store = catalog.NewMemStore()
+	store, cleanup, err := buildStore(cfg)
+	if err != nil {
+		return err
 	}
+	defer cleanup()
 
-	s := &catalog.Server{
+	srv := &catalog.Server{
 		Store: store,
 		Log:   log,
 	}
 
 	reg := prometheus.NewRegistry()
-	h := catalog.NewHandler(s, catalog.HTTPDeps{
+	h := catalog.NewHandler(srv, catalog.HTTPDeps{
 		Log:            log,
-		Service:        service,
+		Service:        serviceName,
 		Registry:       reg,
-		MetricsEnabled: true,
-		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+		MetricsEnabled: cfg.MetricsEnabled,
+		MetricsToken:   cfg.MetricsToken,
 	})
 
-	if err := kit.RunHTTPServer(":"+port, h, log); err != nil {
-		log.Fatal("http server stopped", zap.Error(err))
+	return kit.RunHTTPServer(":"+cfg.Port, h, log)
+}
+
+func loadConfig() (Config, error) {
+	cfg := Config{
+		Port:          getenv("PORT", "8082"),
+		PostgresDSN:   os.Getenv("POSTGRES_DSN"),
+		AllowMemStore: os.Getenv("ALLOW_MEMSTORE") == "1",
+
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
 	}
+
+	if cfg.PostgresDSN == "" && !cfg.AllowMemStore {
+		return Config{}, errors.New("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+	}
+
+	return cfg, nil
+}
+
+func buildStore(cfg Config) (catalog.Store, func(), error) {
+	if cfg.PostgresDSN == "" {
+		return catalog.NewMemStore(), func() {}, nil
+	}
+
+	db, err := openPostgres(cfg.PostgresDSN)
+	if err != nil {
+		return nil, func() {}, err
+	}
+
+	if err := pingDB(db, 3*time.Second); err != nil {
+		_ = db.Close()
+		return nil, func() {}, err
+	}
+
+	return catalog.NewPostgresStore(db), func() { _ = db.Close() }, nil
+}
+
+func openPostgres(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
+	return db, nil
+}
+
+func pingDB(db *sql.DB, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return db.PingContext(ctx)
 }
 
 func getenv(k, def string) string {

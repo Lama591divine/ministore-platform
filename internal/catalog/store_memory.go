@@ -7,27 +7,30 @@ import (
 )
 
 type MemStore struct {
-	mu sync.RWMutex
-	m  map[string]Product
+	mu       sync.RWMutex
+	products map[string]Product
 }
 
 func NewMemStore() *MemStore {
-	s := &MemStore{m: map[string]Product{}}
-	s.m["p1"] = Product{ID: "p1", Title: "Keyboard", PriceCents: 4990}
-	s.m["p2"] = Product{ID: "p2", Title: "Mouse", PriceCents: 1990}
-	return s
+	return &MemStore{
+		products: map[string]Product{
+			"p1": {ID: "p1", Title: "Keyboard", PriceCents: 4990},
+			"p2": {ID: "p2", Title: "Mouse", PriceCents: 1990},
+		},
+	}
 }
 
-func (s *MemStore) Ping(ctx context.Context) error { return nil }
+func (s *MemStore) Ping(ctx context.Context) error {
+	return nil
+}
 
 func (s *MemStore) ListSortedByID(ctx context.Context) ([]Product, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	out := make([]Product, 0, len(s.m))
-	for _, p := range s.m {
+	out := make([]Product, 0, len(s.products))
+	for _, p := range s.products {
 		out = append(out, p)
 	}
+	s.mu.RUnlock()
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -35,8 +38,8 @@ func (s *MemStore) ListSortedByID(ctx context.Context) ([]Product, error) {
 
 func (s *MemStore) Get(ctx context.Context, id string) (Product, bool, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	p, ok := s.products[id]
+	s.mu.RUnlock()
 
-	p, ok := s.m[id]
 	return p, ok, nil
 }

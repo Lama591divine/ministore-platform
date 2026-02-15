@@ -23,20 +23,32 @@ type HTTPDeps struct {
 
 func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID)
-	r.Use(kit.Recoverer)
-	r.Use(kit.Logging(deps.Log))
 
-	if deps.Registry != nil {
-		metrics := kit.NewMetrics(deps.Registry)
-		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
-
-		if deps.MetricsEnabled {
-			r.With(kit.MetricsAuth(deps.MetricsToken)).
-				Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
-		}
-	}
+	setupMiddleware(r, deps)
+	setupMetrics(r, deps)
 
 	r.Mount("/", s.Routes())
 	return r
+}
+
+func setupMiddleware(r *chi.Mux, deps HTTPDeps) {
+	r.Use(chimw.RequestID)
+	r.Use(kit.Recoverer)
+	r.Use(kit.Logging(deps.Log))
+}
+
+func setupMetrics(r *chi.Mux, deps HTTPDeps) {
+	if deps.Registry == nil {
+		return
+	}
+
+	metrics := kit.NewMetrics(deps.Registry)
+	r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
+
+	if !deps.MetricsEnabled {
+		return
+	}
+
+	r.With(kit.MetricsAuth(deps.MetricsToken)).
+		Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
 }
