@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -21,36 +22,58 @@ type HTTPDeps struct {
 	MetricsToken   string
 }
 
+const (
+	loginLimitPerMin    = 5
+	registerLimitPerMin = 3
+	limitWindow         = 60 * time.Second
+)
+
 func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	r := chi.NewRouter()
 
+	metricsOn := deps.MetricsEnabled && deps.Registry != nil
+	if deps.MetricsEnabled && deps.Registry == nil && deps.Log != nil {
+		deps.Log.Warn("metrics enabled but Registry is nil")
+	}
+
+	setupMiddleware(r, deps, metricsOn)
+	setupRoutes(r, s, deps, metricsOn)
+
+	return r
+}
+
+func setupMiddleware(r *chi.Mux, deps HTTPDeps, metricsOn bool) {
 	r.Use(chimw.RequestID)
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(deps.Log))
 
-	if deps.MetricsEnabled && deps.Registry != nil {
+	if metricsOn {
 		metrics := kit.NewMetrics(deps.Registry)
 		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
 	}
+}
 
-	loginLimiter := kit.NewIPRateLimiter(5, 1*60)
-	registerLimiter := kit.NewIPRateLimiter(3, 1*60)
+func setupRoutes(r *chi.Mux, s *Server, deps HTTPDeps, metricsOn bool) {
+	loginLimiter := kit.NewIPRateLimiter(loginLimitPerMin, int(limitWindow.Seconds()))
+	registerLimiter := kit.NewIPRateLimiter(registerLimitPerMin, int(limitWindow.Seconds()))
 
-	r.Group(func(rr chi.Router) {
-		rr.With(loginLimiter.Middleware).Post("/auth/login", s.handleLogin)
-		rr.With(registerLimiter.Middleware).Post("/auth/register", s.handleRegister)
+	r.Route("/auth", func(rr chi.Router) {
+		rr.With(loginLimiter.Middleware).Post("/login", s.handleLogin)
+		rr.With(registerLimiter.Middleware).Post("/register", s.handleRegister)
+		rr.Get("/whoami", s.handleWhoAmI)
 	})
 
-	r.Get("/auth/whoami", s.handleWhoAmI)
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/healthz", healthz)
 	r.Get("/readyz", s.handleReady)
 
-	if deps.MetricsEnabled && deps.Registry != nil {
+	if metricsOn {
 		r.With(kit.MetricsAuth(deps.MetricsToken)).Handle(
 			"/metrics",
 			promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}),
 		)
 	}
+}
 
-	return r
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
 }

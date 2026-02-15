@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"strings"
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
@@ -14,34 +13,41 @@ type MemStore struct {
 }
 
 func NewMemStore() *MemStore {
-	return &MemStore{byEmail: make(map[string]User)}
+	return &MemStore{
+		byEmail: make(map[string]User),
+	}
 }
 
-func (s *MemStore) Ping(ctx context.Context) error { return nil }
+func (s *MemStore) Ping(context.Context) error { return nil }
 
-func (s *MemStore) Create(ctx context.Context, email, password, role, id string) error {
-	email = strings.ToLower(strings.TrimSpace(email))
-	password = strings.TrimSpace(password)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.byEmail[email]; ok {
-		return ErrEmailExists
-	}
+func (s *MemStore) Create(_ context.Context, email, password, role, id string) error {
+	email = normalizeEmail(email)
+	password = normalizePassword(password)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
-	s.byEmail[email] = User{ID: id, Email: email, Hash: hash, Role: role}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.byEmail[email]; exists {
+		return ErrEmailExists
+	}
+
+	s.byEmail[email] = User{
+		ID:    id,
+		Email: email,
+		Hash:  hash,
+		Role:  role,
+	}
 	return nil
 }
 
-func (s *MemStore) Verify(ctx context.Context, email, password string) (User, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	password = strings.TrimSpace(password)
+func (s *MemStore) Verify(_ context.Context, email, password string) (User, error) {
+	email = normalizeEmail(email)
+	password = normalizePassword(password)
 
 	s.mu.RLock()
 	u, ok := s.byEmail[email]
@@ -50,10 +56,8 @@ func (s *MemStore) Verify(ctx context.Context, email, password string) (User, er
 	if !ok {
 		return User{}, ErrInvalidCredentials
 	}
-
 	if err := bcrypt.CompareHashAndPassword(u.Hash, []byte(password)); err != nil {
 		return User{}, ErrInvalidCredentials
 	}
-
 	return u, nil
 }
