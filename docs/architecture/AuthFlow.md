@@ -1,49 +1,48 @@
 ```mermaid
 sequenceDiagram
-autonumber
-participant C as Client
-participant GW as Gateway
-participant A as Auth
-participant DB as Postgres (auth)
-
-C->>GW: POST /auth/register {email,password}
-GW->>A: proxy POST /auth/register
-A->>DB: INSERT users (bcrypt hash)
-DB-->>A: OK / unique violation
-A-->>GW: 201 Created / 409 Conflict
-GW-->>C: 201 / 409
-
-C->>GW: POST /auth/login {email,password}
-GW->>A: proxy POST /auth/login
-A->>DB: SELECT user by email
-DB-->>A: user row
-A->>A: bcrypt compare + issue JWT (15m)
-A-->>GW: 200 {access_token}
-GW-->>C: 200 {access_token}
+    autonumber
+    participant C as Client
+    participant GW as Gateway
+    participant A as Auth
+    participant DB as Postgres (auth)
+    
+    C->>GW: POST /auth/register {email,password}
+    GW->>A: proxy POST /auth/register
+    A->>DB: INSERT users (bcrypt hash)
+    DB-->>A: OK / unique violation
+    A-->>GW: 201 Created / 409 Conflict
+    GW-->>C: 201 / 409
+    
+    C->>GW: POST /auth/login {email,password}
+    GW->>A: proxy POST /auth/login
+    A->>DB: SELECT user by email
+    DB-->>A: user row
+    A->>A: bcrypt compare + issue JWT (15m)
+    A-->>GW: 200 {access_token}
+    GW-->>C: 200 {access_token}
 ```
 
 ```mermaid
 sequenceDiagram
-autonumber
-participant C as Client
-participant GW as Gateway
-participant CAT as Catalog
-participant DB as Postgres (catalog)
-
-```mermaid
-C->>GW: GET /products
-GW->>CAT: proxy GET /products
-CAT->>DB: SELECT products ORDER BY id
-DB-->>CAT: rows
-CAT-->>GW: 200 [products]
-GW-->>C: 200 [products]
-
-C->>GW: GET /products/{id}
-GW->>CAT: proxy GET /products/{id}
-CAT->>DB: SELECT product WHERE id=$1
-DB-->>CAT: row / no rows
-CAT-->>GW: 200 product / 404
-GW-->>C: 200 / 404
+    autonumber
+    participant C as Client
+    participant GW as Gateway
+    participant CAT as Catalog
+    participant DB as Postgres (catalog)
+    
+    C->>GW: GET /products
+    GW->>CAT: proxy GET /products
+    CAT->>DB: SELECT products ORDER BY id
+    DB-->>CAT: rows
+    CAT-->>GW: 200 [products]
+    GW-->>C: 200 [products]
+    
+    C->>GW: GET /products/{id}
+    GW->>CAT: proxy GET /products/{id}
+    CAT->>DB: SELECT product WHERE id=$1
+    DB-->>CAT: row / no rows
+    CAT-->>GW: 200 product / 404
+    GW-->>C: 200 / 404
 ```
 
 ```mermaid
