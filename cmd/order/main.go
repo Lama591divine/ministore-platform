@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
 	"os"
 	"time"
 
@@ -14,67 +16,124 @@ import (
 	"MiniStore/pkg/kit"
 )
 
+const serviceName = "order"
+
+type Config struct {
+	Port       string
+	CatalogURL string
+	JWTSecret  string
+
+	PostgresDSN   string
+	AllowMemStore bool
+
+	MetricsEnabled bool
+	MetricsToken   string
+}
+
 func main() {
-	service := "order"
-	log := kit.NewLogger(service)
+	log := kit.NewLogger(serviceName)
 	defer func() { _ = log.Sync() }()
 
-	port := getenv("PORT", "8083")
-	catalogURL := getenv("CATALOG_URL", "http://catalog:8082")
+	if err := run(log); err != nil {
+		log.Fatal("service failed", zap.Error(err))
+	}
+}
 
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if len(jwtSecret) < 32 {
-		log.Fatal("JWT_SECRET is required and must be at least 32 chars")
+func run(log *zap.Logger) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 
-	dsn := os.Getenv("POSTGRES_DSN")
-	if dsn == "" && os.Getenv("ALLOW_MEMSTORE") != "1" {
-		log.Fatal("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+	store, cleanup, err := buildStore(cfg)
+	if err != nil {
+		return err
 	}
+	defer cleanup()
 
-	var store order.Store
-	if dsn != "" {
-		db, err := sql.Open("pgx", dsn)
-		if err != nil {
-			log.Fatal("db open", zap.Error(err))
-		}
-		defer func() { _ = db.Close() }()
-
-		db.SetMaxOpenConns(20)
-		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(30 * time.Minute)
-		db.SetConnMaxIdleTime(5 * time.Minute)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
-			log.Fatal("db ping", zap.Error(err))
-		}
-
-		store = order.NewPostgresStore(db)
-	} else {
-		store = order.NewMemStore()
-	}
-
-	s := &order.Server{
+	srv := &order.Server{
 		Store:   store,
-		Catalog: order.NewCatalogClient(catalogURL),
+		Catalog: order.NewCatalogClient(cfg.CatalogURL),
 		Log:     log,
 	}
 
 	reg := prometheus.NewRegistry()
-	h := order.NewHandler(s, order.HTTPDeps{
+	h := order.NewHandler(srv, order.HTTPDeps{
 		Log:            log,
-		Service:        service,
+		Service:        serviceName,
 		Registry:       reg,
-		JWTSecret:      jwtSecret,
-		MetricsEnabled: true,
-		MetricsToken:   os.Getenv("METRICS_TOKEN"),
+		JWTSecret:      cfg.JWTSecret,
+		MetricsEnabled: cfg.MetricsEnabled,
+		MetricsToken:   cfg.MetricsToken,
 	})
 
-	if err := kit.RunHTTPServer(":"+port, h, log); err != nil {
-		log.Fatal("http server stopped", zap.Error(err))
+	return kit.RunHTTPServer(":"+cfg.Port, h, log)
+}
+
+func loadConfig() (Config, error) {
+	cfg := Config{
+		Port:       getenv("PORT", "8083"),
+		CatalogURL: getenv("CATALOG_URL", "http://catalog:8082"),
+		JWTSecret:  os.Getenv("JWT_SECRET"),
+
+		PostgresDSN:   os.Getenv("POSTGRES_DSN"),
+		AllowMemStore: os.Getenv("ALLOW_MEMSTORE") == "1",
+
+		MetricsEnabled: true,
+		MetricsToken:   os.Getenv("METRICS_TOKEN"),
 	}
+
+	if len(cfg.JWTSecret) < 32 {
+		return Config{}, errors.New("JWT_SECRET is required and must be at least 32 chars")
+	}
+
+	if cfg.PostgresDSN == "" && !cfg.AllowMemStore {
+		return Config{}, errors.New("POSTGRES_DSN is required (set ALLOW_MEMSTORE=1 for dev)")
+	}
+
+	if _, err := http.NewRequest(http.MethodGet, cfg.CatalogURL, nil); err != nil {
+		return Config{}, errors.New("CATALOG_URL is invalid")
+	}
+
+	return cfg, nil
+}
+
+func buildStore(cfg Config) (order.Store, func(), error) {
+	if cfg.PostgresDSN == "" {
+		return order.NewMemStore(), func() {}, nil
+	}
+
+	db, err := openPostgres(cfg.PostgresDSN)
+	if err != nil {
+		return nil, func() {}, err
+	}
+
+	if err := pingDB(db, 3*time.Second); err != nil {
+		_ = db.Close()
+		return nil, func() {}, err
+	}
+
+	return order.NewPostgresStore(db), func() { _ = db.Close() }, nil
+}
+
+func openPostgres(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
+	return db, nil
+}
+
+func pingDB(db *sql.DB, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return db.PingContext(ctx)
 }
 
 func getenv(k, def string) string {

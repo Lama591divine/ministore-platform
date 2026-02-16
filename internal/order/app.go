@@ -26,32 +26,60 @@ type HTTPDeps struct {
 	MetricsToken   string
 }
 
+const readyTimeout = 1 * time.Second
+
 func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 	if len(deps.JWTSecret) < 32 {
 		panic("JWTSecret is required and must be at least 32 chars")
 	}
 
-	j := auth.NewTokenMaker(deps.JWTSecret)
+	jwt := auth.NewTokenMaker(deps.JWTSecret)
 
 	r := chi.NewRouter()
+	setupMiddleware(r, deps)
+	setupMetrics(r, deps)
+
+	r.Get("/healthz", healthz)
+	r.Get("/readyz", readyz(s))
+
+	r.Group(func(pr chi.Router) {
+		pr.Use(AuthJWT(jwt))
+		pr.Post("/orders", s.CreateHandler())
+		pr.Get("/orders/{id}", s.GetHandler())
+	})
+
+	return r
+}
+
+func setupMiddleware(r *chi.Mux, deps HTTPDeps) {
 	r.Use(chimw.RequestID)
 	r.Use(kit.Recoverer)
 	r.Use(kit.Logging(deps.Log))
+}
 
-	if deps.Registry != nil {
-		metrics := kit.NewMetrics(deps.Registry)
-		r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
-
-		if deps.MetricsEnabled {
-			r.With(kit.MetricsAuth(deps.MetricsToken)).
-				Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
-		}
+func setupMetrics(r *chi.Mux, deps HTTPDeps) {
+	if deps.Registry == nil {
+		return
 	}
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	metrics := kit.NewMetrics(deps.Registry)
+	r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
 
-	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	if !deps.MetricsEnabled {
+		return
+	}
+
+	r.With(kit.MetricsAuth(deps.MetricsToken)).
+		Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
+}
+
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+func readyz(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
 		defer cancel()
 
 		if err := s.Store.Ping(ctx); err != nil {
@@ -61,14 +89,7 @@ func NewHandler(s *Server, deps HTTPDeps) http.Handler {
 			kit.WriteError(w, r, http.StatusServiceUnavailable, "not ready", nil)
 			return
 		}
+
 		w.WriteHeader(http.StatusOK)
-	})
-
-	r.Group(func(pr chi.Router) {
-		pr.Use(AuthJWT(j))
-		pr.Post("/orders", s.CreateHandler())
-		pr.Get("/orders/{id}", s.GetHandler())
-	})
-
-	return r
+	}
 }

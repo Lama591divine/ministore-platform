@@ -11,7 +11,10 @@ import (
 
 type ctxKey string
 
-const userKey ctxKey = "user"
+const (
+	userKey      ctxKey = "user"
+	bearerPrefix        = "Bearer "
+)
 
 type User struct {
 	ID   string
@@ -26,13 +29,13 @@ func UserFromContext(ctx context.Context) (User, bool) {
 func AuthJWT(jwt *auth.TokenMaker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authz := r.Header.Get("Authorization")
-			if !strings.HasPrefix(authz, "Bearer ") {
+			tok, ok := bearerToken(r)
+			if !ok {
 				kit.WriteError(w, r, http.StatusUnauthorized, "missing token", nil)
 				return
 			}
 
-			claims, err := jwt.Parse(strings.TrimPrefix(authz, "Bearer "))
+			claims, err := jwt.Parse(tok)
 			if err != nil || claims.UserID == "" {
 				kit.WriteError(w, r, http.StatusUnauthorized, "invalid token", nil)
 				return
@@ -42,4 +45,18 @@ func AuthJWT(jwt *auth.TokenMaker) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	authz := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authz, bearerPrefix) {
+		return "", false
+	}
+
+	tok := strings.TrimSpace(strings.TrimPrefix(authz, bearerPrefix))
+	if tok == "" {
+		return "", false
+	}
+
+	return tok, true
 }
