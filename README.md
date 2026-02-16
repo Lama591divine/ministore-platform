@@ -1,43 +1,87 @@
-# MiniStore Platform
+# MiniStore
 
-Учебная платформа на Go в формате микросервисов: `auth`, `catalog`, `order` за **API Gateway**.  
-Проект сделан как песочница для практики SRE/DevOps навыков: контейнеризация, миграции БД, e2e-тесты, CI/CD, мониторинг.
+Небольшой учебный проект с микросервисами: `gateway`, `auth`, `catalog`, `order`.
 
-## Статус Kubernetes
+- **gateway** — единая точка входа (reverse proxy), health/ready/metrics
+- **auth** — регистрация/логин, выпуск JWT
+- **catalog** — чтение каталога товаров
+- **order** — создание/получение заказов, проверка JWT, расчёт total через catalog
 
-Развёртывание в **Kubernetes** находится в процессе доработки.  
-Манифесты уже есть и позволяют поднять базовый стек, но структура, секреты/конфиги, best practices и окружения будут улучшаться.
+---
 
-## Что внутри
+## Architecture
 
-### Сервисы
+- Overview diagram: `docs/architecture/overview.md`
+- Request flows (sequence diagrams): `docs/architecture/flows.md`
 
-- **gateway** (HTTP, порт `8080`) — единая точка входа, проксирует запросы в сервисы, валидирует JWT для защищённых ручек.
-- **auth** (порт `8081`) — регистрация/логин, хранение пользователей, выдача JWT (HS256).
-- **catalog** (порт `8082`) — товары и цены (`price_cents`).
-- **order** (порт `8083`) — заказы; при создании заказа запрашивает товары из `catalog` и считает итоговую сумму.
+---
 
-### Хранилище и миграции
+## Services
 
-- По отдельной **Postgres** базе на сервис: `authdb`, `catalogdb`, `orderdb`.
-- Миграции выполняются контейнером **migrate** (`migrate/migrate`) перед стартом сервисов.
+### Gateway (`gateway`, :8080)
+- Routes:
+    - `/auth/*` -> `auth`
+    - `/products/*` -> `catalog`
+    - `/orders/*` -> `order` (JWT check on gateway)
+- Infra:
+    - `GET /healthz`
+    - `GET /readyz` (checks auth/catalog/order `/readyz`)
+    - `GET /metrics` (token-protected)
 
-### Наблюдаемость
+### Auth (`auth`, :8081)
+- API:
+    - `POST /auth/register`
+    - `POST /auth/login` -> `{ "access_token": "..." }`
+    - `GET /auth/whoami`
+- Infra:
+    - `GET /healthz`
+    - `GET /readyz` (DB ping)
+    - `GET /metrics` (token-protected)
 
-- Structured logs (zap).
-- Prometheus metrics на `GET /metrics` (доступ защищён токеном `METRICS_TOKEN`).
-- **Prometheus** и **Grafana** поднимаются рядом со стеком (через Docker Compose), чтобы смотреть метрики без внешней инфраструктуры.
+### Catalog (`catalog`, :8082)
+- API:
+    - `GET /products`
+    - `GET /products/{id}`
+- Infra:
+    - `GET /healthz`
+    - `GET /readyz` (store ping)
+    - `GET /metrics` (token-protected)
 
-## Быстрый старт (Docker Compose)
+### Order (`order`, :8083)
+- API (JWT required):
+    - `POST /orders`
+    - `GET /orders/{id}`
+- Notes:
+    - On create, fetches product price from `catalog` to compute `total_cents`
+    - Access control: users can only read their own orders
+- Infra:
+    - `GET /healthz`
+    - `GET /readyz` (store ping)
+    - `GET /metrics` (token-protected)
 
-### Требования
+---
 
-- Docker
+## Configuration (env)
 
-### 1) Подготовить переменные окружения
+Common:
+- `JWT_SECRET` — required (min 32 chars)
+- `METRICS_TOKEN` — token for `/metrics`
 
-Создай файл `.env` в корне проекта:
+Gateway:
+- `PORT` (default `8080`)
+- `AUTH_URL` (default `http://auth:8081`)
+- `CATALOG_URL` (default `http://catalog:8082`)
+- `ORDER_URL` (default `http://order:8083`)
 
-```bash
-JWT_SECRET=<строка минимум 32 символа>
-METRICS_TOKEN=<любой токен, например dev-metrics-token>
+Auth:
+- `PORT` (default `8081`)
+- `POSTGRES_DSN` — required
+
+Catalog:
+- `PORT` (default `8082`)
+- `POSTGRES_DSN` — required (or `ALLOW_MEMSTORE=1` for dev)
+
+Order:
+- `PORT` (default `8083`)
+- `CATALOG_URL` (default `http://catalog:8082`)
+- `POSTGRES_DSN` — required (or `ALLOW_MEMSTORE=1` for dev)
