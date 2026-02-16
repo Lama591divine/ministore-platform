@@ -33,6 +33,11 @@ type Deps struct {
 	JWTSecret  string
 }
 
+const (
+	readyTimeout      = 2 * time.Second
+	readyProbeTimeout = 700 * time.Millisecond
+)
+
 var readyClient = &http.Client{
 	Transport: &http.Transport{
 		MaxIdleConns:        50,
@@ -42,66 +47,19 @@ var readyClient = &http.Client{
 }
 
 func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
-	authProxy, err := NewReverseProxy(deps.AuthURL, httpDeps.Log)
-	if err != nil {
-		return nil, err
-	}
-	catalogProxy, err := NewReverseProxy(deps.CatalogURL, httpDeps.Log)
-	if err != nil {
-		return nil, err
-	}
-	orderProxy, err := NewReverseProxy(deps.OrderURL, httpDeps.Log)
+	authProxy, catalogProxy, orderProxy, err := buildProxies(deps, httpDeps.Log)
 	if err != nil {
 		return nil, err
 	}
 
-	j := auth.NewTokenMaker(deps.JWTSecret)
+	jwt := auth.NewTokenMaker(deps.JWTSecret)
 
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID)
-	r.Use(kit.Recoverer)
-	r.Use(kit.Logging(httpDeps.Log))
+	setupMiddleware(r, httpDeps)
+	setupMetrics(r, httpDeps)
 
-	if httpDeps.Registry != nil {
-		metrics := kit.NewMetrics(httpDeps.Registry)
-		r.Use(metrics.Middleware(httpDeps.Service, kit.ChiRoutePatternOrPath))
-
-		if httpDeps.MetricsEnabled {
-			r.With(kit.MetricsAuth(httpDeps.MetricsToken)).
-				Handle("/metrics", promhttp.HandlerFor(httpDeps.Registry, promhttp.HandlerOpts{}))
-		}
-	}
-
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-
-	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
-		if err := checkReady(ctx, deps.AuthURL+"/readyz"); err != nil {
-			if httpDeps.Log != nil {
-				httpDeps.Log.Warn("readyz failed: auth", zap.Error(err))
-			}
-			kit.WriteError(w, r, http.StatusServiceUnavailable, "auth not ready", nil)
-			return
-		}
-		if err := checkReady(ctx, deps.CatalogURL+"/readyz"); err != nil {
-			if httpDeps.Log != nil {
-				httpDeps.Log.Warn("readyz failed: catalog", zap.Error(err))
-			}
-			kit.WriteError(w, r, http.StatusServiceUnavailable, "catalog not ready", nil)
-			return
-		}
-		if err := checkReady(ctx, deps.OrderURL+"/readyz"); err != nil {
-			if httpDeps.Log != nil {
-				httpDeps.Log.Warn("readyz failed: order", zap.Error(err))
-			}
-			kit.WriteError(w, r, http.StatusServiceUnavailable, "order not ready", nil)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
+	r.Get("/healthz", healthz)
+	r.Get("/readyz", readyz(deps, httpDeps.Log))
 
 	r.Handle("/auth", authProxy)
 	r.Handle("/auth/*", authProxy)
@@ -110,7 +68,7 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 	r.Handle("/products/*", catalogProxy)
 
 	r.Group(func(pr chi.Router) {
-		pr.Use(AuthJWT(j))
+		pr.Use(AuthJWT(jwt))
 		pr.Handle("/orders", orderProxy)
 		pr.Handle("/orders/*", orderProxy)
 	})
@@ -118,23 +76,104 @@ func NewHandler(deps Deps, httpDeps HTTPDeps) (http.Handler, error) {
 	return r, nil
 }
 
+func buildProxies(deps Deps, log *zap.Logger) (authProxy, catalogProxy, orderProxy http.Handler, err error) {
+	ap, err := NewReverseProxy(deps.AuthURL, log)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	cp, err := NewReverseProxy(deps.CatalogURL, log)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	op, err := NewReverseProxy(deps.OrderURL, log)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return ap, cp, op, nil
+}
+
+func setupMiddleware(r *chi.Mux, deps HTTPDeps) {
+	r.Use(chimw.RequestID)
+	r.Use(kit.Recoverer)
+	r.Use(kit.Logging(deps.Log))
+}
+
+func setupMetrics(r *chi.Mux, deps HTTPDeps) {
+	if deps.Registry == nil {
+		return
+	}
+
+	metrics := kit.NewMetrics(deps.Registry)
+	r.Use(metrics.Middleware(deps.Service, kit.ChiRoutePatternOrPath))
+
+	if !deps.MetricsEnabled {
+		return
+	}
+
+	r.With(kit.MetricsAuth(deps.MetricsToken)).
+		Handle("/metrics", promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{}))
+}
+
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+func readyz(deps Deps, log *zap.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+		defer cancel()
+
+		if err := checkReady(ctx, deps.AuthURL+"/readyz"); err != nil {
+			if log != nil {
+				log.Warn("readyz failed: auth", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "auth not ready", nil)
+			return
+		}
+
+		if err := checkReady(ctx, deps.CatalogURL+"/readyz"); err != nil {
+			if log != nil {
+				log.Warn("readyz failed: catalog", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "catalog not ready", nil)
+			return
+		}
+
+		if err := checkReady(ctx, deps.OrderURL+"/readyz"); err != nil {
+			if log != nil {
+				log.Warn("readyz failed: order", zap.Error(err))
+			}
+			kit.WriteError(w, r, http.StatusServiceUnavailable, "order not ready", nil)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 func checkReady(ctx context.Context, url string) error {
-	cctx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	cctx, cancel := context.WithTimeout(ctx, readyProbeTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(cctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
+
 	resp, err := readyClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status=%d", resp.StatusCode)
 	}
+
 	return nil
 }

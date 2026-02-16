@@ -21,6 +21,8 @@ type ctxKey string
 const (
 	userIDKey   ctxKey = "user_id"
 	userRoleKey ctxKey = "user_role"
+
+	bearerPrefix = "Bearer "
 )
 
 func UserIDFromContext(ctx context.Context) (string, bool) {
@@ -36,22 +38,42 @@ func UserRoleFromContext(ctx context.Context) (string, bool) {
 func AuthJWT(jwt *auth.TokenMaker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authz := r.Header.Get("Authorization")
-			if !strings.HasPrefix(authz, "Bearer ") {
+			tok, ok := bearerToken(r)
+			if !ok {
 				kit.WriteError(w, r, http.StatusUnauthorized, "missing token", nil)
 				return
 			}
-			claims, err := jwt.Parse(strings.TrimPrefix(authz, "Bearer "))
+
+			claims, err := jwt.Parse(tok)
 			if err != nil {
 				kit.WriteError(w, r, http.StatusUnauthorized, "invalid token", nil)
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), userIDKey, claims.UserID)
-			ctx = context.WithValue(ctx, userRoleKey, claims.Role)
+			ctx := withAuthContext(r.Context(), claims.UserID, claims.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	authz := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authz, bearerPrefix) {
+		return "", false
+	}
+
+	tok := strings.TrimSpace(strings.TrimPrefix(authz, bearerPrefix))
+	if tok == "" {
+		return "", false
+	}
+
+	return tok, true
+}
+
+func withAuthContext(ctx context.Context, userID, role string) context.Context {
+	ctx = context.WithValue(ctx, userIDKey, userID)
+	ctx = context.WithValue(ctx, userRoleKey, role)
+	return ctx
 }
 
 func NewReverseProxy(target string, log *zap.Logger) (*httputil.ReverseProxy, error) {
@@ -61,8 +83,15 @@ func NewReverseProxy(target string, log *zap.Logger) (*httputil.ReverseProxy, er
 	}
 
 	p := httputil.NewSingleHostReverseProxy(u)
+	p.Transport = newProxyTransport()
+	p.ErrorHandler = proxyErrorHandler(target, log)
+	p.ModifyResponse = proxyModifyResponse(target, log)
 
-	p.Transport = &http.Transport{
+	return p, nil
+}
+
+func newProxyTransport() *http.Transport {
+	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   1 * time.Second,
@@ -75,8 +104,10 @@ func NewReverseProxy(target string, log *zap.Logger) (*httputil.ReverseProxy, er
 		TLSHandshakeTimeout:   1 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+}
 
-	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+func proxyErrorHandler(target string, log *zap.Logger) func(http.ResponseWriter, *http.Request, error) {
+	return func(w http.ResponseWriter, r *http.Request, err error) {
 		if log != nil {
 			log.Warn("proxy error",
 				zap.String("target", target),
@@ -86,28 +117,37 @@ func NewReverseProxy(target string, log *zap.Logger) (*httputil.ReverseProxy, er
 			)
 		}
 
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if isTimeoutErr(err) {
 			kit.WriteError(w, r, http.StatusGatewayTimeout, "upstream timeout", nil)
 			return
 		}
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			kit.WriteError(w, r, http.StatusGatewayTimeout, "upstream timeout", nil)
-			return
-		}
+
 		kit.WriteError(w, r, http.StatusBadGateway, "bad gateway", nil)
 	}
+}
 
-	p.ModifyResponse = func(resp *http.Response) error {
-		if resp != nil && resp.StatusCode >= 500 && log != nil && resp.Request != nil && resp.Request.URL != nil {
+func proxyModifyResponse(target string, log *zap.Logger) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		if log == nil || resp == nil || resp.Request == nil || resp.Request.URL == nil {
+			return nil
+		}
+
+		if resp.StatusCode >= 500 {
 			log.Warn("upstream 5xx",
 				zap.String("target", target),
 				zap.Int("status", resp.StatusCode),
 				zap.String("path", resp.Request.URL.Path),
 			)
 		}
+
 		return nil
 	}
+}
 
-	return p, nil
+func isTimeoutErr(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
