@@ -28,50 +28,67 @@ func (l *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 		ip := clientIP(r)
 
 		now := time.Now()
-		cut := now.Add(-l.window)
+		cutoff := now.Add(-l.window)
 
-		l.mu.Lock()
-		ts := l.hits[ip]
-
-		n := 0
-		for _, t := range ts {
-			if t.After(cut) {
-				ts[n] = t
-				n++
-			}
-		}
-		ts = ts[:n]
-
-		if len(ts) >= l.limit {
-			l.hits[ip] = ts
-			l.mu.Unlock()
+		limited := l.recordAndCheck(ip, now, cutoff)
+		if limited {
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}
-
-		ts = append(ts, now)
-		l.hits[ip] = ts
-		l.mu.Unlock()
 
 		next.ServeHTTP(w, r)
 	})
 }
 
-func clientIP(r *http.Request) string {
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
+func (l *IPRateLimiter) recordAndCheck(ip string, now, cutoff time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ts := l.hits[ip]
+	ts = prune(ts, cutoff)
+
+	if len(ts) >= l.limit {
+		l.hits[ip] = ts
+		return true
+	}
+
+	l.hits[ip] = append(ts, now)
+	return false
+}
+
+func prune(ts []time.Time, cutoff time.Time) []time.Time {
+	n := 0
+	for _, t := range ts {
+		if t.After(cutoff) {
+			ts[n] = t
+			n++
 		}
+	}
+	return ts[:n]
+}
+
+func clientIP(r *http.Request) string {
+	if ip := firstForwardedFor(r.Header.Get("X-Forwarded-For")); ip != "" {
+		return ip
 	}
 
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil && host != "" {
 		return host
 	}
+
 	return r.RemoteAddr
+}
+
+func firstForwardedFor(xff string) string {
+	if xff == "" {
+		return ""
+	}
+
+	p := strings.Split(xff, ",")
+	if len(p) == 0 {
+		return ""
+	}
+
+	return strings.TrimSpace(p[0])
 }

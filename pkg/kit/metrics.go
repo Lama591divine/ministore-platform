@@ -8,24 +8,39 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const (
+	labelService = "service"
+	labelMethod  = "method"
+	labelPath    = "path"
+	labelStatus  = "status"
+
+	defaultStatusCode = http.StatusOK
+)
+
 type Metrics struct {
-	Reqs   *prometheus.CounterVec
-	Latenc *prometheus.HistogramVec
+	Requests *prometheus.CounterVec
+	Latency  *prometheus.HistogramVec
 }
 
 func NewMetrics(reg *prometheus.Registry) *Metrics {
 	m := &Metrics{
-		Reqs: prometheus.NewCounterVec(
-			prometheus.CounterOpts{Name: "http_requests_total", Help: "Total HTTP requests"},
-			[]string{"service", "method", "path", "status"},
+		Requests: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "http_requests_total",
+				Help: "Total HTTP requests",
+			},
+			[]string{labelService, labelMethod, labelPath, labelStatus},
 		),
-		Latenc: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP latency"},
-			[]string{"service", "method", "path"},
+		Latency: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name: "http_request_duration_seconds",
+				Help: "HTTP latency",
+			},
+			[]string{labelService, labelMethod, labelPath},
 		),
 	}
 
-	reg.MustRegister(m.Reqs, m.Latenc)
+	reg.MustRegister(m.Requests, m.Latency)
 	return m
 }
 
@@ -39,17 +54,23 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func (m *Metrics) Middleware(service string, pathLabel func(r *http.Request) string) func(http.Handler) http.Handler {
+func (m *Metrics) Middleware(service string, pathLabel func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sw := &statusWriter{ResponseWriter: w, status: 200}
-			start := time.Now()
+			sw := &statusWriter{
+				ResponseWriter: w,
+				status:         defaultStatusCode,
+			}
 
+			start := time.Now()
 			next.ServeHTTP(sw, r)
 
 			path := pathLabel(r)
-			m.Latenc.WithLabelValues(service, r.Method, path).Observe(time.Since(start).Seconds())
-			m.Reqs.WithLabelValues(service, r.Method, path, strconv.Itoa(sw.status)).Inc()
+			m.Latency.WithLabelValues(service, r.Method, path).
+				Observe(time.Since(start).Seconds())
+
+			m.Requests.WithLabelValues(service, r.Method, path, strconv.Itoa(sw.status)).
+				Inc()
 		})
 	}
 }
