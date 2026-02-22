@@ -25,16 +25,6 @@ const (
 	bearerPrefix = "Bearer "
 )
 
-func UserIDFromContext(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(userIDKey).(string)
-	return v, ok
-}
-
-func UserRoleFromContext(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(userRoleKey).(string)
-	return v, ok
-}
-
 func AuthJWT(jwt *auth.TokenMaker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
