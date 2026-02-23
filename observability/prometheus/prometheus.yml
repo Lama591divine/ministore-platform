@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "auth"
+    metrics_path: /tokens
+    bearer_token_file: /etc/prometheus/tokens/token
+    static_configs:
+      - targets: ["auth:8081"]
+
+  - job_name: "catalog"
+    metrics_path: /tokens
+    bearer_token_file: /etc/prometheus/tokens/token
+    static_configs:
+      - targets: ["catalog:8082"]
+
+  - job_name: "order"
+    metrics_path: /tokens
+    bearer_token_file: /etc/prometheus/tokens/token
+    static_configs:
+      - targets: ["order:8083"]
+
+  - job_name: "gateway"
+    metrics_path: /tokens
+    bearer_token_file: /etc/prometheus/tokens/token
+    static_configs:
+      - targets: ["gateway:8080"]

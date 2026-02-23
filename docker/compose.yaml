@@ -1,0 +1,136 @@
+services:
+  postgres:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile_postgres
+    env_file:
+      - ../env/postgres.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend
+
+  migrate_auth:
+    image: postgres:16
+    env_file:
+      - ../env/auth.env
+    volumes:
+      - ../migrations/auth:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        echo "Running auth migrations..."
+        psql "$$POSTGRES_DSN" -f /migrations/000001_users.up.sql
+
+  migrate_catalog:
+    image: postgres:16
+    env_file:
+      - ../env/catalog.env
+    volumes:
+      - ../migrations/catalog:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        echo "Running catalog migrations..."
+        psql "$$POSTGRES_DSN" -f /migrations/000001_products.up.sql
+
+  migrate_order:
+    image: postgres:16
+    env_file:
+      - ../env/order.env
+    volumes:
+      - ../migrations/order:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        echo "Running order migrations..."
+        psql "$$POSTGRES_DSN" -f /migrations/000001_orders.up.sql
+
+  auth:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+      args:
+        SERVICE: auth
+    env_file:
+      - ../env/auth.env
+    depends_on:
+      - migrate_auth
+    networks:
+      - backend
+
+  catalog:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+      args:
+        SERVICE: catalog
+    env_file:
+      - ../env/catalog.env
+    depends_on:
+      - migrate_catalog
+    networks:
+      - backend
+
+  order:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+      args:
+        SERVICE: order
+    env_file:
+      - ../env/order.env
+    depends_on:
+      - migrate_order
+    networks:
+      - backend
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: ./docker/Dockerfile
+      args:
+        SERVICE: gateway
+    env_file:
+      - ../env/gateway.env
+    depends_on:
+      - auth
+      - catalog
+      - order
+    ports:
+      - "8080:8080"
+    networks:
+      - edge
+      - backend
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+
+volumes:
+  pgdata: {}
