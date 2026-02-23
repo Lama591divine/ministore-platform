@@ -1,4 +1,5 @@
 ```mermaid
+sequenceDiagram
     flowchart LR
     Client[Client / Frontend] -->|HTTP| GW[Gateway :8080]
     
