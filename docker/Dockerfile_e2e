@@ -1,0 +1,16 @@
+ARG GO_VERSION=1.24
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+FROM --platform=${TARGETOS}/${TARGETARCH} golang:${GO_VERSION}
+
+WORKDIR /src
+
+RUN apt-get update && apt-get install -y bash ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ENTRYPOINT ["go", "test", "./integration", "-tags=integration", "-v"]

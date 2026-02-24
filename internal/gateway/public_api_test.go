@@ -18,6 +18,14 @@ import (
 
 const jwtSecret = "test-secret-32-chars-minimum-........"
 
+type testEnv struct {
+	Auth    *httptest.Server
+	Catalog *httptest.Server
+	Order   *httptest.Server
+	GW      *httptest.Server
+	Client  *http.Client
+}
+
 func newAuthTS(t *testing.T, jwtSecret string) *httptest.Server {
 	t.Helper()
 
@@ -91,6 +99,30 @@ func newGatewayTS(t *testing.T, jwtSecret, authURL, catalogURL, orderURL string)
 	return httptest.NewServer(h)
 }
 
+func newTestEnv(t *testing.T) testEnv {
+	t.Helper()
+
+	authTS := newAuthTS(t, jwtSecret)
+	t.Cleanup(authTS.Close)
+
+	catalogTS := newCatalogTS(t)
+	t.Cleanup(catalogTS.Close)
+
+	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
+	t.Cleanup(orderTS.Close)
+
+	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
+	t.Cleanup(gwTS.Close)
+
+	return testEnv{
+		Auth:    authTS,
+		Catalog: catalogTS,
+		Order:   orderTS,
+		GW:      gwTS,
+		Client:  &http.Client{},
+	}
+}
+
 func doJSON(t *testing.T, c *http.Client, method, url string, body any, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
 
@@ -127,206 +159,147 @@ func doJSON(t *testing.T, c *http.Client, method, url string, body any, headers 
 	return resp, raw
 }
 
-func TestGateway_PublicAPI_Readyz(t *testing.T) {
-	authTS := newAuthTS(t, jwtSecret)
-	t.Cleanup(authTS.Close)
-
-	catalogTS := newCatalogTS(t)
-	t.Cleanup(catalogTS.Close)
-
-	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
-	t.Cleanup(orderTS.Close)
-
-	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
-	t.Cleanup(gwTS.Close)
-
-	c := &http.Client{}
-	resp, raw := doJSON(t, c, http.MethodGet, gwTS.URL+"/readyz", nil, nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("readyz status=%d body=%s", resp.StatusCode, string(raw))
+func mustStatus(t *testing.T, resp *http.Response, raw []byte, want int) {
+	t.Helper()
+	if resp.StatusCode != want {
+		t.Fatalf("status=%d want=%d body=%s", resp.StatusCode, want, string(raw))
 	}
 }
 
-func TestGateway_PublicAPI_HappyPath(t *testing.T) {
-	authTS := newAuthTS(t, jwtSecret)
-	t.Cleanup(authTS.Close)
+func register(t *testing.T, env testEnv, email, password string) {
+	t.Helper()
+	resp, raw := doJSON(t, env.Client, http.MethodPost, env.GW.URL+"/auth/register", map[string]any{
+		"email":    email,
+		"password": password,
+	}, nil)
+	mustStatus(t, resp, raw, http.StatusCreated)
+}
 
-	catalogTS := newCatalogTS(t)
-	t.Cleanup(catalogTS.Close)
+func login(t *testing.T, env testEnv, email, password string) string {
+	t.Helper()
+	resp, raw := doJSON(t, env.Client, http.MethodPost, env.GW.URL+"/auth/login", map[string]any{
+		"email":    email,
+		"password": password,
+	}, nil)
+	mustStatus(t, resp, raw, http.StatusOK)
 
-	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
-	t.Cleanup(orderTS.Close)
-
-	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
-	t.Cleanup(gwTS.Close)
-
-	c := &http.Client{}
-
-	{
-		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/register", map[string]any{
-			"email":    "user@example.com",
-			"password": "password123",
-		}, nil)
-
-		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("register status=%d body=%s", resp.StatusCode, string(raw))
-		}
+	var lr struct {
+		AccessToken string `json:"access_token"`
 	}
 
-	var accessToken string
-	{
-		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/login", map[string]any{
-			"email":    "user@example.com",
-			"password": "password123",
-		}, nil)
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("login status=%d body=%s", resp.StatusCode, string(raw))
-		}
-
-		var lr struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.Unmarshal(raw, &lr); err != nil {
-			t.Fatalf("decode login: %v body=%s", err, string(raw))
-		}
-		if lr.AccessToken == "" {
-			t.Fatalf("empty access_token")
-		}
-		accessToken = lr.AccessToken
+	if err := json.Unmarshal(raw, &lr); err != nil {
+		t.Fatalf("decode login: %v body=%s", err, string(raw))
 	}
+	if lr.AccessToken == "" {
+		t.Fatalf("empty access_token")
+	}
+	return lr.AccessToken
+}
+
+func createOrder(t *testing.T, env testEnv, token string, items []map[string]any) order.Order {
+	t.Helper()
+	resp, raw := doJSON(t, env.Client, http.MethodPost, env.GW.URL+"/orders", map[string]any{
+		"items": items,
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	mustStatus(t, resp, raw, http.StatusCreated)
 
 	var created order.Order
-	{
-		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/orders", map[string]any{
-			"items": []map[string]any{
-				{"product_id": "p1", "qty": 2},
-				{"product_id": "p2", "qty": 1},
-			},
-		}, map[string]string{
-			"Authorization": "Bearer " + accessToken,
-		})
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("decode order: %v body=%s", err, string(raw))
+	}
+	if created.ID == "" {
+		t.Fatalf("empty order id")
+	}
+	if created.UserID == "" {
+		t.Fatalf("empty user_id")
+	}
+	return created
+}
 
-		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("create order status=%d body=%s", resp.StatusCode, string(raw))
-		}
+func getOrder(t *testing.T, env testEnv, token, id string) order.Order {
+	t.Helper()
+	resp, raw := doJSON(t, env.Client, http.MethodGet, env.GW.URL+"/orders/"+id, nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	mustStatus(t, resp, raw, http.StatusOK)
 
-		if err := json.Unmarshal(raw, &created); err != nil {
-			t.Fatalf("decode order: %v body=%s", err, string(raw))
-		}
+	var got order.Order
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode order: %v body=%s", err, string(raw))
+	}
+	return got
+}
 
-		if created.TotalCents != 11970 {
-			t.Fatalf("total_cents=%d", created.TotalCents)
-		}
-		if created.ID == "" {
-			t.Fatalf("empty order id")
-		}
-		if created.UserID == "" {
-			t.Fatalf("empty user_id")
-		}
+func TestGateway_PublicAPI_Readyz(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	resp, raw := doJSON(t, env.Client, http.MethodGet, env.GW.URL+"/readyz", nil, nil)
+	mustStatus(t, resp, raw, http.StatusOK)
+}
+
+func TestGateway_PublicAPI_HappyPath(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+
+	email := "user@example.com"
+	pass := "password123"
+
+	register(t, env, email, pass)
+	token := login(t, env, email, pass)
+
+	created := createOrder(t, env, token, []map[string]any{
+		{"product_id": "p1", "qty": 2},
+		{"product_id": "p2", "qty": 1},
+	})
+
+	if created.TotalCents != 11970 {
+		t.Fatalf("total_cents=%d", created.TotalCents)
 	}
 
-	{
-		resp, raw := doJSON(t, c, http.MethodGet, gwTS.URL+"/orders/"+created.ID, nil, map[string]string{
-			"Authorization": "Bearer " + accessToken,
-		})
+	got := getOrder(t, env, token, created.ID)
 
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("get order status=%d body=%s", resp.StatusCode, string(raw))
-		}
-
-		var got order.Order
-		if err := json.Unmarshal(raw, &got); err != nil {
-			t.Fatalf("decode order: %v body=%s", err, string(raw))
-		}
-		if got.ID != created.ID {
-			t.Fatalf("id=%s want=%s", got.ID, created.ID)
-		}
-		if got.TotalCents != created.TotalCents {
-			t.Fatalf("total=%d want=%d", got.TotalCents, created.TotalCents)
-		}
+	if got.ID != created.ID {
+		t.Fatalf("id=%s want=%s", got.ID, created.ID)
+	}
+	if got.TotalCents != created.TotalCents {
+		t.Fatalf("total=%d want=%d", got.TotalCents, created.TotalCents)
 	}
 }
 
 func TestGateway_PublicAPI_OrdersRequiresAuth(t *testing.T) {
-	authTS := newAuthTS(t, jwtSecret)
-	t.Cleanup(authTS.Close)
+	t.Parallel()
+	env := newTestEnv(t)
 
-	catalogTS := newCatalogTS(t)
-	t.Cleanup(catalogTS.Close)
-
-	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
-	t.Cleanup(orderTS.Close)
-
-	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
-	t.Cleanup(gwTS.Close)
-
-	c := &http.Client{}
-
-	resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/orders", map[string]any{
+	resp, raw := doJSON(t, env.Client, http.MethodPost, env.GW.URL+"/orders", map[string]any{
 		"items": []map[string]any{{"product_id": "p1", "qty": 1}},
 	}, nil)
 
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status=%d body=%s", resp.StatusCode, string(raw))
-	}
+	mustStatus(t, resp, raw, http.StatusUnauthorized)
 }
 
 func TestGateway_PublicAPI_InvalidTokenRejected(t *testing.T) {
-	authTS := newAuthTS(t, jwtSecret)
-	t.Cleanup(authTS.Close)
+	t.Parallel()
+	env := newTestEnv(t)
 
-	catalogTS := newCatalogTS(t)
-	t.Cleanup(catalogTS.Close)
+	email := "user2@example.com"
+	pass := "password123"
 
-	orderTS := newOrderTS(t, jwtSecret, catalogTS.URL)
-	t.Cleanup(orderTS.Close)
-
-	gwTS := newGatewayTS(t, jwtSecret, authTS.URL, catalogTS.URL, orderTS.URL)
-	t.Cleanup(gwTS.Close)
-
-	c := &http.Client{}
-
-	{
-		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/register", map[string]any{
-			"email":    "user2@example.com",
-			"password": "password123",
-		}, nil)
-		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("register status=%d body=%s", resp.StatusCode, string(raw))
-		}
-	}
-
-	var tok string
-	{
-		resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/auth/login", map[string]any{
-			"email":    "user2@example.com",
-			"password": "password123",
-		}, nil)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("login status=%d body=%s", resp.StatusCode, string(raw))
-		}
-		var lr struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.Unmarshal(raw, &lr); err != nil {
-			t.Fatalf("decode login: %v body=%s", err, string(raw))
-		}
-		tok = lr.AccessToken
-	}
+	register(t, env, email, pass)
+	tok := login(t, env, email, pass)
 
 	if len(tok) < 5 {
 		t.Fatalf("token too short")
 	}
 	badTok := tok[:len(tok)-1] + "x"
 
-	resp, raw := doJSON(t, c, http.MethodPost, gwTS.URL+"/orders", map[string]any{
+	resp, raw := doJSON(t, env.Client, http.MethodPost, env.GW.URL+"/orders", map[string]any{
 		"items": []map[string]any{{"product_id": "p1", "qty": 1}},
 	}, map[string]string{
 		"Authorization": "Bearer " + badTok,
 	})
 
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status=%d body=%s", resp.StatusCode, string(raw))
-	}
+	mustStatus(t, resp, raw, http.StatusUnauthorized)
 }

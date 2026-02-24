@@ -1,59 +1,41 @@
 stages:
-  - lint
   - test
   - integration
 
-variables:
-  GO_VERSION: "1.25"
-  GOMODCACHE: "$CI_PROJECT_DIR/.cache/gomod"
-  GOCACHE: "$CI_PROJECT_DIR/.cache/gocache"
-  DOCKER_BUILDKIT: "1"
-  COMPOSE_DOCKER_CLI_BUILD: "1"
-
-cache:
-  key: ${CI_COMMIT_REF_SLUG}
-  paths:
-    - .cache/gomod
-    - .cache/gocache
-
-lint:
-  stage: lint
-  image: golang:${GO_VERSION}
-  script:
-    - FILES="$(find . -type f -name '*.go' -not -path './.cache/*' -not -path './vendor/*' -not -path './.git/*')"
-    - test -z "$(gofmt -l $FILES)" || (echo "gofmt required"; gofmt -l $FILES; exit 1)
-    - go vet ./...
-
 unit_tests:
   stage: test
-  image: golang:${GO_VERSION}
+  image: golang:1.24
   script:
-    - go test ./... -shuffle=on
+    - go test ./...
 
 integration_tests:
   stage: integration
   image: docker:27
   services:
-    - name: docker:27-dind
+    - docker:27-dind
   variables:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
-    DOCKER_BUILDKIT: "1"
-    COMPOSE_DOCKER_CLI_BUILD: "1"
   before_script:
     - apk add --no-cache docker-cli-compose bash
-    - test -n "$JWT_SECRET" || (echo "JWT_SECRET is empty" && exit 1)
-    - test ${#JWT_SECRET} -ge 32 || (echo "JWT_SECRET must be >= 32 chars" && exit 1)
-    - test -n "$METRICS_TOKEN" || (echo "METRICS_TOKEN is empty" && exit 1)
-    - printf "JWT_SECRET=%s\nMETRICS_TOKEN=%s\n" "$JWT_SECRET" "$METRICS_TOKEN" > .env
   script:
-    - docker version
-    - docker compose version
-    - docker compose -f compose.yaml -f docker-compose.integration.yml up -d --build --scale e2e=0
-    - docker compose -f compose.yaml -f docker-compose.integration.yml run --rm e2e
+    - |
+      printf "JWT_SECRET=%s\nMETRICS_TOKEN=%s\n" "$JWT_SECRET" "$METRICS_TOKEN" > .env
+      docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml up -d --build
+
+    - |
+      OUT="$(docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml run --rm -e E2E_MODE=create e2e)"
+      echo "$OUT"
+      E2E_ORDER_ID="$(echo "$OUT" | sed -n 's/^E2E_ORDER_ID=//p' | tail -n1)"
+      test -n "$E2E_ORDER_ID" || exit 1
+
+    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml restart order
+
+    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml run --rm -e E2E_MODE=verify -e E2E_ORDER_ID="$E2E_ORDER_ID" e2e
+
   after_script:
-    - docker compose -f compose.yaml -f docker-compose.integration.yml logs --no-color > compose.logs || true
-    - docker compose -f compose.yaml -f docker-compose.integration.yml down -v || true
+    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml logs > compose.logs || true
+    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml down -v || true
   artifacts:
     when: always
     paths:

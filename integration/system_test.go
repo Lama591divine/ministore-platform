@@ -8,9 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -18,63 +19,206 @@ import (
 var baseURL = getenv("E2E_BASE_URL", "http://localhost:8080")
 
 func TestSystem_E2E_WithDB(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	waitReady(t, ctx, baseURL+"/readyz")
+	env := newE2EEnv(t, baseURL)
+	env.WaitReady(ctx)
 
-	email := fmt.Sprintf("user_%d_%d@example.com", time.Now().Unix(), rand.Intn(100000))
-	pass := "password123!"
+	mode := strings.ToLower(getenv("E2E_MODE", "create"))
 
-	doJSON(t, http.MethodPost, baseURL+"/auth/register", map[string]any{
-		"email":    email,
-		"password": pass,
-	}, nil, 201)
+	email := mustGetenv(t, "E2E_EMAIL")
+	pass := mustGetenv(t, "E2E_PASSWORD")
 
-	var loginResp struct {
-		AccessToken string `json:"access_token"`
-	}
-	doJSON(t, http.MethodPost, baseURL+"/auth/login", map[string]any{
-		"email":    email,
-		"password": pass,
-	}, &loginResp, 200)
-	if loginResp.AccessToken == "" {
+	env.tryRegister(email, pass)
+
+	token := env.Login(email, pass)
+	if token == "" {
 		t.Fatalf("empty access_token")
 	}
 
-	var products []map[string]any
-	doJSONAuth(t, http.MethodGet, baseURL+"/products", loginResp.AccessToken, nil, &products, 200)
+	switch mode {
+	case "create":
+		orderID := createOrderFlow(t, env, token)
+
+		fmt.Printf("E2E_ORDER_ID=%s\n", orderID)
+
+	case "verify":
+		orderID := mustGetenv(t, "E2E_ORDER_ID")
+
+		env.WaitReady(ctx)
+
+		got := env.GetOrder(token, orderID)
+		if gotID := getString(got, "id"); gotID != orderID {
+			t.Fatalf("after restart: got id=%q want=%q; body=%#v", gotID, orderID, got)
+		}
+
+	default:
+		t.Fatalf("unknown E2E_MODE=%q", mode)
+	}
+}
+
+func createOrderFlow(t *testing.T, env *e2eEnv, token string) string {
+	t.Helper()
+
+	products := env.Products(token)
 	if len(products) == 0 {
 		t.Fatalf("expected non-empty products")
 	}
 
-	pid, _ := products[0]["id"].(string)
+	pid := getString(products[0], "id")
 	if pid == "" {
 		t.Fatalf("product id missing in response: %#v", products[0])
 	}
 
-	var created map[string]any
-	doJSONAuth(t, http.MethodPost, baseURL+"/orders", loginResp.AccessToken, map[string]any{
-		"items": []map[string]any{
-			{"product_id": pid, "qty": 2},
-		},
-	}, &created, 201)
-
-	orderID, _ := created["id"].(string)
+	orderID := env.CreateOrder(token, []itemReq{{ProductID: pid, Qty: 2}})
 	if orderID == "" {
-		t.Fatalf("order id missing: %#v", created)
+		t.Fatalf("order id missing")
 	}
 
-	var got map[string]any
-	doJSONAuth(t, http.MethodGet, baseURL+"/orders/"+orderID, loginResp.AccessToken, nil, &got, 200)
-
-	if os.Getenv("E2E_RESTART_ORDER") == "1" {
-		restartOrderContainer(t, ctx)
-		waitReady(t, ctx, baseURL+"/readyz")
-		doJSONAuth(t, http.MethodGet, baseURL+"/orders/"+orderID, loginResp.AccessToken, nil, &got, 200)
+	got := env.GetOrder(token, orderID)
+	if gotID := getString(got, "id"); gotID != orderID {
+		t.Fatalf("got id=%q want=%q; body=%#v", gotID, orderID, got)
 	}
+
+	return orderID
+}
+
+type e2eEnv struct {
+	t       *testing.T
+	baseURL string
+	client  *http.Client
+}
+
+func newE2EEnv(t *testing.T, baseURL string) *e2eEnv {
+	t.Helper()
+	return &e2eEnv{
+		t:       t,
+		baseURL: baseURL,
+		client:  &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
+func (e *e2eEnv) WaitReady(ctx context.Context) {
+	e.t.Helper()
+	waitReady(e.t, ctx, e.baseURL+"/readyz")
+}
+
+func (e *e2eEnv) tryRegister(email, password string) {
+	e.t.Helper()
+
+	req, err := newJSONRequest(http.MethodPost, e.baseURL+"/auth/register", "", map[string]any{
+		"email":    email,
+		"password": password,
+	})
+	if err != nil {
+		e.t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		e.t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		return
+	}
+	if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusBadRequest {
+		return
+	}
+
+	raw, _ := io.ReadAll(resp.Body)
+	e.t.Fatalf("register: status=%d body=%s", resp.StatusCode, string(raw))
+}
+
+func (e *e2eEnv) Login(email, password string) string {
+	e.t.Helper()
+	var out struct {
+		AccessToken string `json:"access_token"`
+	}
+	e.mustJSON(http.MethodPost, "/auth/login", "", map[string]any{
+		"email":    email,
+		"password": password,
+	}, &out, http.StatusOK)
+	return out.AccessToken
+}
+
+func (e *e2eEnv) Products(token string) []map[string]any {
+	e.t.Helper()
+	var out []map[string]any
+	e.mustJSON(http.MethodGet, "/products", token, nil, &out, http.StatusOK)
+	return out
+}
+
+type itemReq struct {
+	ProductID string `json:"product_id"`
+	Qty       int    `json:"qty"`
+}
+
+func (e *e2eEnv) CreateOrder(token string, items []itemReq) string {
+	e.t.Helper()
+	var out map[string]any
+	e.mustJSON(http.MethodPost, "/orders", token, map[string]any{
+		"items": items,
+	}, &out, http.StatusCreated)
+	return getString(out, "id")
+}
+
+func (e *e2eEnv) GetOrder(token, orderID string) map[string]any {
+	e.t.Helper()
+	var out map[string]any
+	e.mustJSON(http.MethodGet, "/orders/"+orderID, token, nil, &out, http.StatusOK)
+	return out
+}
+
+func (e *e2eEnv) mustJSON(method, path, token string, body any, out any, want int) {
+	e.t.Helper()
+	url := e.baseURL + path
+
+	req, err := newJSONRequest(method, url, token, body)
+	if err != nil {
+		e.t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		e.t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != want {
+		raw, _ := io.ReadAll(resp.Body)
+		e.t.Fatalf("%s %s: status=%d want=%d body=%s", method, url, resp.StatusCode, want, string(raw))
+	}
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			e.t.Fatalf("decode response: %v", err)
+		}
+	}
+}
+
+func newJSONRequest(method, url, token string, body any) (*http.Request, error) {
+	var r io.Reader
+	if body != nil {
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			return nil, fmt.Errorf("encode body: %w", err)
+		}
+		r = &buf
+	}
+	req, err := http.NewRequest(method, url, r)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, nil
 }
 
 func waitReady(t *testing.T, ctx context.Context, url string) {
@@ -85,7 +229,7 @@ func waitReady(t *testing.T, ctx context.Context, url string) {
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		resp, err := client.Do(req)
-		if err == nil && resp != nil && resp.StatusCode == 200 {
+		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
 			_ = resp.Body.Close()
 			return
 		}
@@ -97,46 +241,13 @@ func waitReady(t *testing.T, ctx context.Context, url string) {
 	t.Fatalf("service not ready: %s", url)
 }
 
-func doJSON(t *testing.T, method, url string, body any, out any, want int) {
-	t.Helper()
-	doJSONAuth(t, method, url, "", body, out, want)
-}
-
-func doJSONAuth(t *testing.T, method, url, token string, body any, out any, want int) {
-	t.Helper()
-
-	var buf bytes.Buffer
-	if body != nil {
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			t.Fatalf("encode body: %v", err)
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
 		}
 	}
-
-	req, err := http.NewRequest(method, url, &buf)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != want {
-		t.Fatalf("%s %s: status=%d want=%d", method, url, resp.StatusCode, want)
-	}
-
-	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-	}
+	return ""
 }
 
 func getenv(k, def string) string {
@@ -144,4 +255,13 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func mustGetenv(t *testing.T, k string) string {
+	t.Helper()
+	v := os.Getenv(k)
+	if v == "" {
+		t.Fatalf("%s is empty", k)
+	}
+	return v
 }

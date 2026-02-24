@@ -1,0 +1,13 @@
+services:
+  e2e:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile_e2e
+      args:
+        GO_VERSION: "1.24"
+    env_file:
+      - ../env/integration.env
+    depends_on:
+      - gateway
+    networks:
+      - edge
