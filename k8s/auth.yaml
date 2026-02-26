@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: auth }
+  template:
+    metadata:
+      labels: { app: auth }
+    spec:
+      containers:
+        - name: auth
+          image: ministore-auth:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: ministore-config
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: AUTH_PORT }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: JWT_SECRET }
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: METRICS_TOKEN }
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: AUTH_POSTGRES_DSN }
+
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8081 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          securityContext:
+            runAsNonRoot: true
+
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "250m", memory: "256Mi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: ministore
+spec:
+  selector: { app: auth }
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081

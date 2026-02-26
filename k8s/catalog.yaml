@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: catalog }
+  template:
+    metadata:
+      labels: { app: catalog }
+    spec:
+      containers:
+        - name: catalog
+          image: ministore-catalog:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: ministore-config
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: CATALOG_PORT }
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: METRICS_TOKEN }
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: CATALOG_POSTGRES_DSN }
+
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8082 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8082 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          securityContext:
+            runAsNonRoot: true
+
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "250m", memory: "256Mi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog
+  namespace: ministore
+spec:
+  selector: { app: catalog }
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082

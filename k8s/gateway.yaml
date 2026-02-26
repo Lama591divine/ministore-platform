@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: ministore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      containers:
+        - name: gateway
+          image: ministore-gateway:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: ministore-config
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: GATEWAY_PORT }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: JWT_SECRET }
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ministore-secrets, key: METRICS_TOKEN }
+            - name: AUTH_URL
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: AUTH_URL }
+            - name: CATALOG_URL
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: CATALOG_URL }
+            - name: ORDER_URL
+              valueFrom:
+                configMapKeyRef: { name: ministore-config, key: ORDER_URL }
+
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          securityContext:
+            runAsNonRoot: true
+
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "300m", memory: "256Mi" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: ministore
+spec:
+  selector: { app: gateway }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
