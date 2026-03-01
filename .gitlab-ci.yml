@@ -20,22 +20,21 @@ integration_tests:
     - apk add --no-cache docker-cli-compose bash
   script:
     - |
-      printf "JWT_SECRET=%s\nMETRICS_TOKEN=%s\n" "$JWT_SECRET" "$METRICS_TOKEN" > .env
-      docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml up -d --build
-
+      printf "JWT_SECRET=%s\nMETRICS_TOKEN=%s\nE2E_EMAIL=%s\nE2E_PASSWORD=%s\n" \
+        "$JWT_SECRET" "$METRICS_TOKEN" "$E2E_EMAIL" "$E2E_PASSWORD" > .env
+    - docker compose -f docker/compose.yml -f docker/compose.integration.yml up -d --build
     - |
-      OUT="$(docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml run --rm -e E2E_MODE=create e2e)"
+      OUT="$(docker compose -f docker/compose.yml -f docker/compose.integration.yml \
+        run --rm -e E2E_MODE=create e2e)"
       echo "$OUT"
       E2E_ORDER_ID="$(echo "$OUT" | sed -n 's/^E2E_ORDER_ID=//p' | tail -n1)"
-      test -n "$E2E_ORDER_ID" || exit 1
-
-    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml restart order
-
-    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml run --rm -e E2E_MODE=verify -e E2E_ORDER_ID="$E2E_ORDER_ID" e2e
-
+      test -n "$E2E_ORDER_ID" || { echo "Order ID not found"; exit 1; }
+    - docker compose -f docker/compose.yml -f docker/compose.integration.yml restart order
+    - docker compose -f docker/compose.yml -f docker/compose.integration.yml \
+      run --rm -e E2E_MODE=verify -e E2E_ORDER_ID="$E2E_ORDER_ID" e2e
   after_script:
-    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml logs > compose.logs || true
-    - docker compose -f docker/compose.yml -f docker/docker-compose.integration.yml down -v || true
+    - docker compose -f docker/compose.yml -f docker/compose.integration.yml logs > compose.logs || true
+    - docker compose -f docker/compose.yml -f docker/compose.integration.yml down -v || true
   artifacts:
     when: always
     paths:
