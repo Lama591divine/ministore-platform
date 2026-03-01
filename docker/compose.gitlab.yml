@@ -5,13 +5,13 @@ services:
     hostname: gitlab
     restart: unless-stopped
     shm_size: "256m"
+    ports:
+      - "8929:80"
+      - "2224:22"
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
-    ports:
-      - "8929:8929"
-      - "2224:22"
     volumes:
       - gitlab_config:/etc/gitlab
       - gitlab_logs:/var/log/gitlab

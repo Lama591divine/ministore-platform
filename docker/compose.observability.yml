@@ -19,7 +19,7 @@ services:
       - ../env/grafana.env
     volumes:
       - grafanadata:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "3000:3000"
     depends_on:
