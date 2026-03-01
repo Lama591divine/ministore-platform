@@ -12,6 +12,7 @@ services:
       - "9090:9090"
     networks:
       - backend
+      - edge
 
   grafana:
     image: grafana/grafana:10.4.1
