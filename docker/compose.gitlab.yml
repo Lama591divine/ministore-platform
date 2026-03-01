@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     shm_size: "256m"
     ports:
-      - "8929:80"
+      - "8929:8929"
       - "2224:22"
     environment:
       GITLAB_OMNIBUS_CONFIG: |
